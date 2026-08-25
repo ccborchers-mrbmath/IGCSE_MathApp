@@ -3,10 +3,10 @@ import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2 } from "lucide-react";
+import { Loader2, Settings } from "lucide-react";
 
 const Home = () => {
-  const { user, userRole, loading, signOut } = useAuth();
+  const { user, userRole, isAdmin, loading, signOut } = useAuth();
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -41,9 +41,19 @@ const Home = () => {
                     {userRole ? <Badge variant="secondary">{userRole}</Badge> : null}
                   </span>
                 </div>
-                <Button variant="outline" onClick={() => void signOut()}>
-                  Sign out
-                </Button>
+                <div className="flex gap-2">
+                  {isAdmin && (
+                    <Button asChild>
+                      <Link to="/admin">
+                        <Settings className="mr-2 h-4 w-4" />
+                        Question bank
+                      </Link>
+                    </Button>
+                  )}
+                  <Button variant="outline" onClick={() => void signOut()}>
+                    Sign out
+                  </Button>
+                </div>
               </div>
             ) : (
               <div className="flex flex-wrap items-center justify-between gap-4">
@@ -59,7 +69,7 @@ const Home = () => {
         </Card>
 
         <p className="text-sm text-muted-foreground">
-          Question bank arrives in Phase 2.
+          347 questions are loaded and awaiting images. Practice opens in Phase 3.
         </p>
       </div>
     </main>
