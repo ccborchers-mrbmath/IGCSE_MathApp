@@ -82,21 +82,36 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
 
 - [x] **Phase 0 — Foundations.** Scaffold, shadcn layer, native Supabase auth,
       Netlify config. Build and lint green.
-- [ ] **Phase 1 — Data model.** Migrations, RLS, seed the 0580 topic tree,
-      create both buckets, generate `src/integrations/supabase/types.ts`.
-- [ ] **Phase 2 — Admin and ingestion.** Bulk upload, OCR, auto-tagging,
-      review queue. Measure real token costs before any batch run.
+- [x] **Phase 1 — Data model.** Schema, RLS, ledger, both buckets, generated
+      types. Seeded from the hand-built question index: 9 topics, 72 subtopics,
+      **347 questions, 582 parts, 441 subtopic links** across all 14 papers of
+      the 2025 series. Questions land `is_published = false` until images are
+      attached in Phase 2.
+- [ ] **Phase 2 — Admin and ingestion.** Bulk image upload matched to the
+      seeded rows by `(year, sitting, variant, question_number)`, then publish.
+      Auto-tagging is **not needed** — the index already carries topics, marks,
+      parts and diagram flags. OCR transcription stays optional.
 - [ ] **Phase 3 — Practice, AI marking, metering.**
 - [ ] **Phase 4 — Progress tracking.**
 - [ ] **Phase 5 — Polish, Lovable handoff, launch.**
 
 Deferred: Paddle checkout, Test Maker, 0580 Core, coaching.
 
+## Data provenance
+
+The question bank comes from a hand-built index of the 2025 series, not from
+AI tagging. It reconciles exactly: every paper totals 100 marks, every
+question's parts sum to its total, all 441 syllabus references resolve. 67 of
+the 72 Extended subtopics were examined in 2025 — E1.3, E3.6, E5.5, E9.1 and
+E9.2 were not, so progress views need a "not yet examined" state rather than
+showing them as 0% coverage.
+
 ## Not yet wired
 
-- `src/integrations/supabase/types.ts` — generated in Phase 1. Until then the
-  Supabase client is untyped and `user_roles` queries fail gracefully to
-  `student`.
-- Google OAuth needs credentials in Supabase → Auth → Providers, with the
+- **Question images.** All 347 rows exist but are unpublished and have no
+  `question_image_path`. Nothing is visible to students until Phase 2.
+- **Google OAuth** needs credentials in Supabase → Auth → Providers, with the
   redirect allowlist covering the Netlify domain, deploy previews and
   `localhost`.
+- **Admin role.** Grant yourself one once you have signed in:
+  `insert into user_roles (user_id, role) values ('<your-uuid>', 'admin');`
