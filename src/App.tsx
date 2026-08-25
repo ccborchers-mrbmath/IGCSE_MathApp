@@ -6,6 +6,9 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Home from "./pages/Home";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
+import AdminDashboard from "./pages/admin/AdminDashboard";
+import BulkUpload from "./pages/admin/BulkUpload";
+import { RequireAdmin } from "@/components/RequireAdmin";
 
 const queryClient = new QueryClient();
 
@@ -18,6 +21,22 @@ const App = () => (
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/auth" element={<Auth />} />
+          <Route
+            path="/admin"
+            element={
+              <RequireAdmin>
+                <AdminDashboard />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/upload"
+            element={
+              <RequireAdmin>
+                <BulkUpload />
+              </RequireAdmin>
+            }
+          />
           {/* Add all custom routes above the catch-all "*" route. */}
           <Route path="*" element={<NotFound />} />
         </Routes>

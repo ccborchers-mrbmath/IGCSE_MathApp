@@ -29,8 +29,9 @@ npm run typecheck  # tsc -b --noEmit
   `41 42 43` are calculator. The second digit is the regional variant.
 - **Only 2025-onward papers.** One syllabus version, so no version field on
   subtopics.
-- Questions are keyed by `(tier, year, sitting, paper_number, question_number)`
-  with a unique constraint, so bulk upload is an idempotent upsert.
+- Questions are keyed by `(tier, year, sitting, variant, question_number)` with a
+  unique constraint. `paper` and `calculator` are generated columns derived
+  from `variant`, so the three can never disagree.
 - **Topics are relational**, not comma-separated strings. This is a deliberate
   fix to a Cambridge design flaw — do not reintroduce string parsing.
 - `student_attempts` links to questions by `question_id` foreign key, not by
@@ -87,8 +88,10 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
       **347 questions, 582 parts, 441 subtopic links** across all 14 papers of
       the 2025 series. Questions land `is_published = false` until images are
       attached in Phase 2.
-- [ ] **Phase 2 — Admin and ingestion.** Bulk image upload matched to the
-      seeded rows by `(year, sitting, variant, question_number)`, then publish.
+- [~] **Phase 2 — Admin and ingestion.** Bulk uploader built: parses Cambridge
+      filenames, matches to seeded rows, uploads to `exam-images`, publishes a
+      question once both its images are present. Admin coverage dashboard shows
+      progress per paper. Awaiting the image set.
       Auto-tagging is **not needed** — the index already carries topics, marks,
       parts and diagram flags. OCR transcription stays optional.
 - [ ] **Phase 3 — Practice, AI marking, metering.**
