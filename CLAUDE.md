@@ -96,7 +96,7 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
       orphans. 58 MB total, 86 kB average.**
       Auto-tagging is **not needed** — the index already carries topics, marks,
       parts and diagram flags. OCR transcription stays optional.
-- [~] **Phase 3 — Practice, AI marking, metering.** Practice browser, question
+- [x] **Phase 3 — Practice, AI marking, metering.** Practice browser, question
       view with mark-scheme reveal, self-assessment (localStorage for anonymous,
       migrating on sign-in). `mark-work` edge function live: Claude Opus 5,
       adaptive thinking, structured output for the mark breakdown, the marking
@@ -104,9 +104,15 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
       call and refunds on failure. Verified end to end against a real
       submission: part-level breakdown, a specific diagnosed error rather than
       a vague label, and the attempt row written.
-      Gap: the Anthropic `usage` block is returned to the client but never
-      persisted, so per-call cost — the thing the whole markup is priced on —
-      is not recorded anywhere.
+      **Metering shipped.** `ai_usage` records one row per call that reached
+      the model — token counts, cost frozen at write time from the versioned
+      `ai_model_pricing` table, who paid, and the outcome. Deliberately a
+      separate axis from the credit ledger, which is silent for admins and is
+      erased by a refund. Refusals and unreadable responses are recorded as
+      `refunded` + real cost, because they are billed by Anthropic and earn
+      nothing. Admin dashboard shows cost per marking, refunded-but-billed
+      spend, cache hit rate and median duration.
+      Remaining: `generate-hint` must call `record_ai_usage` too when built.
 - [ ] **Phase 4 — Progress tracking.**
 - [ ] **Phase 5 — Polish, Lovable handoff, launch.**
 
@@ -129,5 +135,9 @@ showing them as 0% coverage.
 - **Admin role.** Granted. Admins bypass the credit ledger entirely
   (`deduct_credits` returns `admin_bypass`), so marking is free while testing.
 - **Credits for non-admins.** No checkout yet. Grant manually:
-  `select grant_credits('<uuid>', 20, 'manual');`
+  `select grant_credits('<uuid>', 20, 'manual');` Price the credit off
+  `ai_usage`, not off a guess — cost per successful marking is on the admin
+  dashboard.
+- **Leaked-password protection** is off. One toggle in Supabase → Auth →
+  Providers, flagged by the security advisor.
 - **`generate-hint`** is not built yet — marking is the only AI call so far.
