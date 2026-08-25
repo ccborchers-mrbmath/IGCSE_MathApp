@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, UploadCloud, RefreshCw } from "lucide-react";
+import { AiCostPanel } from "@/components/admin/AiCostPanel";
 
 interface PaperRow {
   year: number;
@@ -182,6 +183,8 @@ const AdminDashboard = () => {
                 </table>
               </CardContent>
             </Card>
+
+            <AiCostPanel />
           </>
         )}
       </div>

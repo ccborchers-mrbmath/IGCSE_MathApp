@@ -29,3 +29,6 @@ dist-ssr
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Supabase CLI scratch
+supabase/.temp/

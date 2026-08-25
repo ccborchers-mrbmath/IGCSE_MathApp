@@ -1,4 +1,4 @@
-import Anthropic from "npm:@anthropic-ai/sdk@0.68.0";
+import Anthropic from "npm:@anthropic-ai/sdk@0.120.0";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -271,7 +271,13 @@ Deno.serve(async (req) => {
       );
     }
 
+    const isAdminBypass = result.reason === "admin_bypass";
+
     const refund = async () => {
+      // An admin was never charged — deduct_credits returned admin_bypass
+      // without touching the balance — so "refunding" would mint them a credit
+      // out of a failure and leave a phantom ledger row.
+      if (isAdminBypass) return;
       await admin.rpc("grant_credits", {
         _user_id: userId,
         _amount: MARKING_COST,
@@ -280,7 +286,49 @@ Deno.serve(async (req) => {
       });
     };
 
+    /**
+     * Record what the call cost, on every path that reached the model.
+     *
+     * Deliberately separate from the credit ledger. The ledger records what the
+     * student paid: it stays silent for admins, and a refund reverses it.
+     * Neither of those makes the tokens free, and the markup is priced on the
+     * tokens — so cost is recorded here whoever ended up paying. A refused or
+     * unreadable response is the case that matters most: the student is
+     * refunded but the tokens are still spent, and that is pure margin loss.
+     */
+    const recordUsage = async (
+      outcome: "ok" | "refusal" | "unreadable" | "error",
+      usage: {
+        input_tokens: number;
+        output_tokens: number;
+        cache_creation_input_tokens?: number | null;
+        cache_read_input_tokens?: number | null;
+      } | null,
+      attemptId: string | null,
+      startedAt: number,
+      refunded: boolean,
+    ) => {
+      const { error } = await admin.rpc("record_ai_usage", {
+        p_user_id: userId,
+        p_function_name: "mark-work",
+        p_model: MODEL,
+        p_billing: isAdminBypass ? "admin_bypass" : refunded ? "refunded" : "charged",
+        p_outcome: outcome,
+        p_input_tokens: usage?.input_tokens ?? 0,
+        p_output_tokens: usage?.output_tokens ?? 0,
+        p_cache_write_tokens: usage?.cache_creation_input_tokens ?? 0,
+        p_cache_read_tokens: usage?.cache_read_input_tokens ?? 0,
+        p_credits_charged: isAdminBypass || refunded ? 0 : MARKING_COST,
+        p_question_id: questionId,
+        p_attempt_id: attemptId,
+        p_duration_ms: Date.now() - startedAt,
+      });
+      // Metering is bookkeeping: it must never cost a student their marking.
+      if (error) console.error("Could not record AI usage", error);
+    };
+
     // ---- mark it ------------------------------------------------------------
+    const startedAt = Date.now();
     try {
       const workBlocks = await Promise.all(workImagePaths.map(workImageBlock));
 
@@ -336,6 +384,7 @@ Deno.serve(async (req) => {
 
       if (response.stop_reason === "refusal") {
         await refund();
+        await recordUsage("refusal", response.usage, null, startedAt, true);
         return json({ error: "Marking was declined for this submission." }, 422);
       }
 
@@ -344,6 +393,7 @@ Deno.serve(async (req) => {
       );
       if (!toolUse) {
         await refund();
+        await recordUsage("unreadable", response.usage, null, startedAt, true);
         return json({ error: "Marking came back in an unreadable form. Please try again." }, 502);
       }
       // strict:true guarantees this validates against MARKING_TOOL's schema.
@@ -376,6 +426,8 @@ Deno.serve(async (req) => {
         console.error("Could not save attempt", attemptError);
       }
 
+      await recordUsage("ok", response.usage, attempt?.id ?? null, startedAt, false);
+
       return json({
         attemptId: attempt?.id ?? null,
         marksAwarded: awarded,
@@ -391,6 +443,10 @@ Deno.serve(async (req) => {
       });
     } catch (modelError) {
       await refund();
+      // No usage block survives a thrown request, so this row carries zero
+      // tokens. It still belongs in the table: failure *rate* is a cost input,
+      // and a missing row would read as a call that never happened.
+      await recordUsage("error", null, null, startedAt, true);
       console.error("Marking failed", modelError);
       const message =
         modelError instanceof Anthropic.APIError

@@ -16,6 +16,105 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_model_pricing: {
+        Row: {
+          cache_read_per_mtok: number
+          cache_write_per_mtok: number
+          effective_from: string
+          input_per_mtok: number
+          model: string
+          output_per_mtok: number
+        }
+        Insert: {
+          cache_read_per_mtok: number
+          cache_write_per_mtok: number
+          effective_from?: string
+          input_per_mtok: number
+          model: string
+          output_per_mtok: number
+        }
+        Update: {
+          cache_read_per_mtok?: number
+          cache_write_per_mtok?: number
+          effective_from?: string
+          input_per_mtok?: number
+          model?: string
+          output_per_mtok?: number
+        }
+        Relationships: []
+      }
+      ai_usage: {
+        Row: {
+          attempt_id: string | null
+          billing: string
+          cache_read_tokens: number
+          cache_write_tokens: number
+          cost_usd: number
+          created_at: string
+          credits_charged: number
+          duration_ms: number | null
+          function_name: string
+          id: string
+          input_tokens: number
+          model: string
+          outcome: string
+          output_tokens: number
+          question_id: string | null
+          user_id: string
+        }
+        Insert: {
+          attempt_id?: string | null
+          billing: string
+          cache_read_tokens?: number
+          cache_write_tokens?: number
+          cost_usd?: number
+          created_at?: string
+          credits_charged?: number
+          duration_ms?: number | null
+          function_name: string
+          id?: string
+          input_tokens?: number
+          model: string
+          outcome: string
+          output_tokens?: number
+          question_id?: string | null
+          user_id: string
+        }
+        Update: {
+          attempt_id?: string | null
+          billing?: string
+          cache_read_tokens?: number
+          cache_write_tokens?: number
+          cost_usd?: number
+          created_at?: string
+          credits_charged?: number
+          duration_ms?: number | null
+          function_name?: string
+          id?: string
+          input_tokens?: number
+          model?: string
+          outcome?: string
+          output_tokens?: number
+          question_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_usage_attempt_id_fkey"
+            columns: ["attempt_id"]
+            isOneToOne: false
+            referencedRelation: "student_attempts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_usage_question_id_fkey"
+            columns: ["question_id"]
+            isOneToOne: false
+            referencedRelation: "questions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       credit_transactions: {
         Row: { amount: number; created_at: string; id: string; metadata: Json; reason: string; user_id: string }
         Insert: { amount: number; created_at?: string; id?: string; metadata?: Json; reason: string; user_id: string }
@@ -282,6 +381,24 @@ export type Database = {
       has_role: {
         Args: { _role: Database["public"]["Enums"]["app_role"]; _user_id: string }
         Returns: boolean
+      }
+      record_ai_usage: {
+        Args: {
+          p_attempt_id?: string
+          p_billing: string
+          p_cache_read_tokens?: number
+          p_cache_write_tokens?: number
+          p_credits_charged?: number
+          p_duration_ms?: number
+          p_function_name: string
+          p_input_tokens?: number
+          p_model: string
+          p_outcome: string
+          p_output_tokens?: number
+          p_question_id?: string
+          p_user_id: string
+        }
+        Returns: string
       }
     }
     Enums: {
