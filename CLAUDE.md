@@ -88,10 +88,12 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
       **347 questions, 582 parts, 441 subtopic links** across all 14 papers of
       the 2025 series. Questions land `is_published = false` until images are
       attached in Phase 2.
-- [~] **Phase 2 — Admin and ingestion.** Bulk uploader built: parses Cambridge
+- [x] **Phase 2 — Admin and ingestion.** Bulk uploader parses Cambridge
       filenames, matches to seeded rows, uploads to `exam-images`, publishes a
       question once both its images are present. Admin coverage dashboard shows
-      progress per paper. Awaiting the image set.
+      progress per paper. **The full 2025 set is in: 694 images, 347/347
+      questions published, every DB path resolving to a stored object and no
+      orphans. 58 MB total, 86 kB average.**
       Auto-tagging is **not needed** — the index already carries topics, marks,
       parts and diagram flags. OCR transcription stays optional.
 - [~] **Phase 3 — Practice, AI marking, metering.** Practice browser, question
@@ -99,7 +101,12 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
       migrating on sign-in). `mark-work` edge function live: Claude Opus 5,
       adaptive thinking, structured output for the mark breakdown, the marking
       rubric held in a cached prompt prefix. Charges the ledger before the model
-      call and refunds on failure.
+      call and refunds on failure. Verified end to end against a real
+      submission: part-level breakdown, a specific diagnosed error rather than
+      a vague label, and the attempt row written.
+      Gap: the Anthropic `usage` block is returned to the client but never
+      persisted, so per-call cost — the thing the whole markup is priced on —
+      is not recorded anywhere.
 - [ ] **Phase 4 — Progress tracking.**
 - [ ] **Phase 5 — Polish, Lovable handoff, launch.**
 
@@ -116,8 +123,6 @@ showing them as 0% coverage.
 
 ## Not yet wired
 
-- **Question images.** All 347 rows exist but are unpublished and have no
-  `question_image_path`. Nothing is visible to students until Phase 2.
 - **Google OAuth** needs credentials in Supabase → Auth → Providers, with the
   redirect allowlist covering the Netlify domain, deploy previews and
   `localhost`.
