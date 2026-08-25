@@ -8,3 +8,19 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+# Vite fingerprints everything under /assets with a content hash, so a changed
+# file gets a changed name. That makes these safe to cache permanently — and
+# it is what makes splitting the vendor chunks worth anything: a deploy that
+# touches app code leaves React, Supabase and TanStack Query cached.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# index.html is NOT fingerprinted. It must be revalidated every time or a
+# visitor keeps loading an old build that points at deleted asset names.
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"

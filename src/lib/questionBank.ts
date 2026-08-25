@@ -45,6 +45,12 @@ export interface Question {
   subtopicCodes: string[];
   /** "2025 Feb-March · P22 · Q7" */
   reference: string;
+  /**
+   * Lowercased summary + reference + codes + part descriptions, built once at
+   * load. Search used to assemble this per question on every keystroke, which
+   * meant 347 array joins per character typed.
+   */
+  searchText: string;
 }
 
 export interface QuestionBank {
@@ -56,28 +62,82 @@ export interface QuestionBank {
 }
 
 /**
- * Loaded as four flat queries and joined here rather than with nested
+ * PostgREST caps a response at the project's max-rows setting (1,000 by
+ * default) and reports the truncation nowhere a client can see — you simply
+ * get fewer rows and no error. The bank is under that today, but one more
+ * exam series puts question_parts past it, and the failure mode would be
+ * questions quietly rendering with some parts missing.
+ *
+ * So page explicitly rather than trusting a single unbounded select. Stop when
+ * a page comes back short, which is the only reliable end-of-data signal.
+ */
+const PAGE_ROWS = 1000;
+
+async function fetchAllRows<T>(
+  what: string,
+  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string; hint?: string | null } | null }>,
+): Promise<T[]> {
+  const all: T[] = [];
+  for (let from = 0; ; from += PAGE_ROWS) {
+    const { data, error } = await page(from, from + PAGE_ROWS - 1);
+    if (error) throw new Error(`Could not load ${what}: ${error.message}${error.hint ? ` (${error.hint})` : ""}`);
+    const rows = data ?? [];
+    all.push(...rows);
+    if (rows.length < PAGE_ROWS) return all;
+  }
+}
+
+/**
+ * Loaded as five flat queries and joined here rather than with nested
  * PostgREST embeds. The whole published bank is a few hundred rows, so the
  * saving from server-side embedding is negligible, and flat selects keep the
  * failure modes obvious — a broken embed alias fails at runtime in a way a
  * type checker cannot catch.
+ *
+ * All five start together instead of in two waves. Parts and subtopic links
+ * used to be filtered
+ * with .in("question_id", <every published id>), which had to wait for the
+ * questions query to finish and then put a ~13 kB list of UUIDs in a GET query
+ * string — twice. That is past the URL length many proxies and CDNs will accept, and it
+ * bought nothing: the RLS policies on both tables already restrict them to
+ * rows belonging to published questions, so an unfiltered select returns
+ * exactly the same rows. Dropping the filter removes the waterfall and the
+ * oversized URLs together.
  */
 export async function fetchQuestionBank(): Promise<QuestionBank> {
-  const [topicsRes, subtopicsRes, questionsRes] = await Promise.all([
+  const [topicsRes, subtopicsRes, questionsRes, partsRes, linksRes] = await Promise.all([
     supabase.from("topics").select("id, section_number, name").order("section_number"),
     supabase.from("subtopics").select("id, topic_id, code, title, position"),
-    supabase
-      .from("questions")
-      // Must stay a single string literal: supabase-js infers the row shape
-      // from it at compile time, and a concatenated expression degrades to an
-      // untyped result.
-      .select(
-        "id, year, sitting, variant, paper, calculator, question_number, marks, summary, has_diagram, dependency, primary_topic_id, question_image_path, markscheme_image_path",
-      )
-      .eq("is_published", true)
-      .order("year")
-      .order("variant")
-      .order("question_number"),
+    fetchAllRows("questions", (from, to) =>
+      supabase
+        .from("questions")
+        // Must stay a single string literal: supabase-js infers the row shape
+        // from it at compile time, and a concatenated expression degrades to
+        // an untyped result.
+        .select(
+          "id, year, sitting, variant, paper, calculator, question_number, marks, summary, has_diagram, dependency, primary_topic_id, question_image_path, markscheme_image_path",
+        )
+        .eq("is_published", true)
+        .order("year")
+        .order("variant")
+        .order("question_number")
+        .range(from, to),
+    ),
+    fetchAllRows("question parts", (from, to) =>
+      supabase
+        .from("question_parts")
+        .select("question_id, label, description, marks, position")
+        .order("question_id")
+        .order("position")
+        .range(from, to),
+    ),
+    fetchAllRows("subtopic links", (from, to) =>
+      supabase
+        .from("question_subtopics")
+        .select("question_id, subtopic_id, is_primary")
+        .order("question_id")
+        .range(from, to),
+    ),
   ]);
 
   // Supabase returns a PostgrestError object, not an Error instance, so
@@ -89,30 +149,6 @@ export async function fetchQuestionBank(): Promise<QuestionBank> {
 
   if (topicsRes.error) raise("Could not load topics", topicsRes.error);
   if (subtopicsRes.error) raise("Could not load subtopics", subtopicsRes.error);
-  if (questionsRes.error) raise("Could not load questions", questionsRes.error);
-
-  const questionIds = (questionsRes.data ?? []).map((q) => q.id);
-
-  // Parts and subtopic links are only fetched for questions we can actually
-  // see; RLS would filter them anyway, but this keeps the payload honest.
-  const [partsRes, linksRes] = await Promise.all([
-    questionIds.length
-      ? supabase
-          .from("question_parts")
-          .select("question_id, label, description, marks, position")
-          .in("question_id", questionIds)
-          .order("position")
-      : Promise.resolve({ data: [], error: null } as const),
-    questionIds.length
-      ? supabase
-          .from("question_subtopics")
-          .select("question_id, subtopic_id, is_primary")
-          .in("question_id", questionIds)
-      : Promise.resolve({ data: [], error: null } as const),
-  ]);
-
-  if (partsRes.error) raise("Could not load question parts", partsRes.error);
-  if (linksRes.error) raise("Could not load subtopic links", linksRes.error);
 
   const topics: Topic[] = (topicsRes.data ?? []).map((t) => ({
     id: t.id,
@@ -131,7 +167,7 @@ export async function fetchQuestionBank(): Promise<QuestionBank> {
   const subtopicsById = new Map(subtopics.map((s) => [s.id, s]));
 
   const partsByQuestion = new Map<string, QuestionPart[]>();
-  for (const p of partsRes.data ?? []) {
+  for (const p of partsRes) {
     const list = partsByQuestion.get(p.question_id) ?? [];
     list.push({ label: p.label, description: p.description, marks: p.marks, position: p.position });
     partsByQuestion.set(p.question_id, list);
@@ -139,7 +175,7 @@ export async function fetchQuestionBank(): Promise<QuestionBank> {
 
   // Primary subtopic first, then the rest in syllabus order.
   const codesByQuestion = new Map<string, string[]>();
-  for (const l of linksRes.data ?? []) {
+  for (const l of linksRes) {
     const sub = subtopicsById.get(l.subtopic_id);
     if (!sub) continue;
     const list = codesByQuestion.get(l.question_id) ?? [];
@@ -148,7 +184,7 @@ export async function fetchQuestionBank(): Promise<QuestionBank> {
     codesByQuestion.set(l.question_id, list);
   }
 
-  const questions: Question[] = (questionsRes.data ?? []).map((q) => ({
+  const questions: Question[] = questionsRes.map((q) => ({
     id: q.id,
     year: q.year,
     sitting: q.sitting,
@@ -166,7 +202,14 @@ export async function fetchQuestionBank(): Promise<QuestionBank> {
     parts: (partsByQuestion.get(q.id) ?? []).sort((a, b) => a.position - b.position),
     subtopicCodes: codesByQuestion.get(q.id) ?? [],
     reference: `${q.year} ${q.sitting} · P${q.variant} · Q${q.question_number}`,
+    searchText: "",
   }));
+
+  for (const q of questions) {
+    q.searchText = [q.summary ?? "", q.reference, ...q.subtopicCodes, ...q.parts.map((p) => p.description)]
+      .join(" ")
+      .toLowerCase();
+  }
 
   return {
     topics,
@@ -198,30 +241,15 @@ export const paperLabel = (key: string) => {
   return `${year} ${sitting} · P${variant}`;
 };
 
-/** Match against the summary, part descriptions, syllabus codes and reference. */
-function matchesSearch(q: Question, needle: string): boolean {
-  const haystack = [
-    q.summary ?? "",
-    q.reference,
-    ...q.subtopicCodes,
-    ...q.parts.map((p) => p.description),
-  ]
-    .join(" ")
-    .toLowerCase();
-  return needle
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((term) => haystack.includes(term));
-}
-
 export function filterQuestions(questions: Question[], f: QuestionFilters): Question[] {
+  // Split the needle once for the whole pass, not once per question.
+  const terms = f.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
   return questions.filter((q) => {
     if (f.topicId && q.topicId !== f.topicId) return false;
     if (f.calculator === "yes" && !q.calculator) return false;
     if (f.calculator === "no" && q.calculator) return false;
     if (f.paperKey && paperKeyOf(q) !== f.paperKey) return false;
-    if (f.search.trim() && !matchesSearch(q, f.search.trim())) return false;
+    if (terms.length && !terms.every((t) => q.searchText.includes(t))) return false;
     return true;
   });
 }

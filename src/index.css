@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+/* Fonts are linked from index.html, not imported here: a CSS @import is
+   invisible to the browser's preload scanner, so it cannot start until this
+   stylesheet has been downloaded and parsed. */
 
 @tailwind base;
 @tailwind components;

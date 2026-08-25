@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -28,6 +28,15 @@ const Practice = () => {
   const { progress, isLocalOnly, completedCount } = useProgress();
   const [filters, setFilters] = useState<QuestionFilters>(emptyFilters);
 
+  // What the input shows updates instantly; what we filter on lags by a beat.
+  // Without this every keystroke re-filters the whole bank and rebuilds the
+  // list, which makes typing feel like wading.
+  const [searchInput, setSearchInput] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setFilters((f) => ({ ...f, search: searchInput })), 150);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
   const set = <K extends keyof QuestionFilters>(k: K, v: QuestionFilters[K]) =>
     setFilters((f) => ({ ...f, [k]: v }));
 
@@ -40,6 +49,18 @@ const Practice = () => {
     () => (data ? filterQuestions(data.questions, filters) : []),
     [data, filters],
   );
+
+  // 347 questions is ~3,500 DOM nodes if they all render at once, which costs
+  // far more than the fetch does. Show a screenful and grow on demand.
+  const PAGE = 40;
+  const [shown, setShown] = useState(PAGE);
+  const resultKey = `${filters.topicId}|${filters.calculator}|${filters.paperKey}|${filters.search}`;
+  const lastKey = useRef(resultKey);
+  if (lastKey.current !== resultKey) {
+    lastKey.current = resultKey;
+    if (shown !== PAGE) setShown(PAGE);
+  }
+  const rendered = visible.slice(0, shown);
 
   // Only offer topics that actually have published questions.
   const topicsWithCounts = useMemo(() => {
@@ -57,7 +78,7 @@ const Practice = () => {
     filters.topicId !== null ||
     filters.calculator !== "all" ||
     filters.paperKey !== null ||
-    filters.search.trim() !== "";
+    searchInput.trim() !== "";
 
   return (
     <div className="min-h-screen bg-background">
@@ -105,8 +126,8 @@ const Practice = () => {
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              value={filters.search}
-              onChange={(e) => set("search", e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search — try 'trapezium', 'E1.11', or 'recurring decimal'"
               className="pl-9"
             />
@@ -168,7 +189,10 @@ const Practice = () => {
             )}
 
             {filtersActive && (
-              <Button size="sm" variant="ghost" onClick={() => setFilters(emptyFilters)}>
+              <Button size="sm" variant="ghost" onClick={() => {
+                setSearchInput("");
+                setFilters(emptyFilters);
+              }}>
                 <X className="mr-1.5 h-3.5 w-3.5" />
                 Clear
               </Button>
@@ -193,7 +217,10 @@ const Practice = () => {
           <Card>
             <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
               <p className="text-muted-foreground">Nothing matches those filters.</p>
-              <Button variant="outline" size="sm" onClick={() => setFilters(emptyFilters)}>
+              <Button variant="outline" size="sm" onClick={() => {
+                setSearchInput("");
+                setFilters(emptyFilters);
+              }}>
                 Clear filters
               </Button>
             </CardContent>
@@ -202,9 +229,10 @@ const Practice = () => {
           <>
             <p className="text-sm text-muted-foreground">
               {visible.length} question{visible.length === 1 ? "" : "s"}
+              {rendered.length < visible.length && ` · showing ${rendered.length}`}
             </p>
             <ul className="flex flex-col gap-2">
-              {visible.map((q) => {
+              {rendered.map((q) => {
                 const done = progress[q.id];
                 return (
                   <li key={q.id}>
@@ -272,6 +300,21 @@ const Practice = () => {
                 );
               })}
             </ul>
+
+            {rendered.length < visible.length && (
+              <div className="flex flex-col items-center gap-2 pb-4">
+                <Button variant="outline" onClick={() => setShown((n) => n + PAGE)}>
+                  Show {Math.min(PAGE, visible.length - rendered.length)} more
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => setShown(visible.length)}
+                  className="text-xs text-muted-foreground underline underline-offset-2"
+                >
+                  Show all {visible.length}
+                </button>
+              </div>
+            )}
           </>
         )}
       </main>
