@@ -1,6 +1,4 @@
 import Anthropic from "npm:@anthropic-ai/sdk@0.68.0";
-import { zodOutputFormat } from "npm:@anthropic-ai/sdk@0.68.0/helpers/zod";
-import { z } from "npm:zod@3.25.76";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -30,36 +28,92 @@ const MODEL = "claude-opus-5";
 const MARKING_COST = 1;
 
 // ---------------------------------------------------------------- schema --
+// A strict tool rather than output_config.format: strict tool use guarantees
+// the input validates against this schema exactly, and needs no SDK helper
+// subpath. tool_choice stays "auto" so adaptive thinking remains available —
+// with one tool available and the instruction below, the model always calls it.
 
-const PartMark = z.object({
-  label: z
-    .string()
-    .describe("Part label exactly as printed, e.g. 'a', 'b(ii)'. Use 'whole' for a single-part question."),
-  marks_available: z.number().int().describe("Marks available for this part."),
-  marks_awarded: z.number().int().describe("Marks earned, judged against the mark scheme."),
-  mark_codes: z
-    .array(z.string())
-    .describe("Cambridge codes actually earned, e.g. ['M1','A1']. Empty if none."),
-  comment: z
-    .string()
-    .describe("One or two sentences: what earned or lost the marks, citing the mark scheme."),
-});
+const MARKING_TOOL = {
+  name: "record_marking",
+  description:
+    "Record the marks awarded for this question, part by part, with feedback for the student.",
+  strict: true,
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      marks_awarded: { type: "integer", description: "Total marks earned across all parts." },
+      marks_available: { type: "integer", description: "Total marks the question carries." },
+      parts: {
+        type: "array",
+        description: "One entry per part, in the order printed on the paper.",
+        items: {
+          type: "object",
+          properties: {
+            label: {
+              type: "string",
+              description: "Part label exactly as printed, e.g. 'a', 'b(ii)'. Use 'whole' for a single-part question.",
+            },
+            marks_available: { type: "integer" },
+            marks_awarded: { type: "integer" },
+            mark_codes: {
+              type: "array",
+              items: { type: "string" },
+              description: "Cambridge codes actually earned, e.g. ['M1','A1']. Empty if none.",
+            },
+            comment: {
+              type: "string",
+              description: "One or two sentences: what earned or lost the marks, citing the mark scheme.",
+            },
+          },
+          required: ["label", "marks_available", "marks_awarded", "mark_codes", "comment"],
+          additionalProperties: false,
+        },
+      },
+      errors: {
+        type: "array",
+        items: { type: "string" },
+        description: "Short phrases naming each distinct error, e.g. 'sign error when expanding'.",
+      },
+      what_went_well: {
+        type: "string",
+        description: "Specific, not generic praise. Empty string if nothing did.",
+      },
+      next_step: { type: "string", description: "The single most useful thing to do next." },
+      illegible: {
+        type: "boolean",
+        description: "True only if the work could not be read well enough to mark fairly.",
+      },
+    },
+    required: [
+      "marks_awarded",
+      "marks_available",
+      "parts",
+      "errors",
+      "what_went_well",
+      "next_step",
+      "illegible",
+    ],
+    additionalProperties: false,
+  },
+};
 
-const Marking = z.object({
-  marks_awarded: z.number().int(),
-  marks_available: z.number().int(),
-  parts: z.array(PartMark),
-  errors: z
-    .array(z.string())
-    .describe("Short phrases naming each distinct error, e.g. 'sign error when expanding'."),
-  what_went_well: z.string().describe("Specific, not generic praise. Empty string if nothing did."),
-  next_step: z
-    .string()
-    .describe("The single most useful thing this student should do next."),
-  illegible: z
-    .boolean()
-    .describe("True only if the work could not be read well enough to mark fairly."),
-});
+interface PartMark {
+  label: string;
+  marks_available: number;
+  marks_awarded: number;
+  mark_codes: string[];
+  comment: string;
+}
+
+interface Marking {
+  marks_awarded: number;
+  marks_available: number;
+  parts: PartMark[];
+  errors: string[];
+  what_went_well: string;
+  next_step: string;
+  illegible: boolean;
+}
 
 // ------------------------------------------------------------ marking rubric --
 // Kept as a frozen constant so it forms a stable cache prefix: the syllabus
@@ -236,7 +290,7 @@ Deno.serve(async (req) => {
             .join("\n")
         : `- whole [${question.marks}]`;
 
-      const response = await anthropic.messages.parse({
+      const response = await anthropic.messages.create({
         model: MODEL,
         max_tokens: 16000,
         thinking: { type: "adaptive" },
@@ -244,8 +298,8 @@ Deno.serve(async (req) => {
           // Correctness matters more here than latency: a wrong mark erodes
           // trust in the whole product.
           effort: "high",
-          format: zodOutputFormat(Marking, "marking"),
         },
+        tools: [MARKING_TOOL],
         system: [
           {
             type: "text",
@@ -270,8 +324,10 @@ Deno.serve(async (req) => {
                   `Mark this attempt at ${question.year} ${question.sitting} Paper ${question.variant} ` +
                   `Question ${question.question_number}, worth ${question.marks} marks in total.\n\n` +
                   `Parts and their mark allocations:\n${partsBrief}\n\n` +
-                  `Award marks part by part. marks_available must match the allocations above, and ` +
-                  `your per-part awards must sum to marks_awarded.`,
+                  `Award marks part by part, then record your marking with the ` +
+                  `record_marking tool — always call it, and call it exactly once. ` +
+                  `marks_available must match the allocations above, and your per-part ` +
+                  `awards must sum to marks_awarded.`,
               },
             ],
           },
@@ -283,11 +339,15 @@ Deno.serve(async (req) => {
         return json({ error: "Marking was declined for this submission." }, 422);
       }
 
-      const marking = response.parsed_output;
-      if (!marking) {
+      const toolUse = response.content.find(
+        (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === MARKING_TOOL.name,
+      );
+      if (!toolUse) {
         await refund();
         return json({ error: "Marking came back in an unreadable form. Please try again." }, 502);
       }
+      // strict:true guarantees this validates against MARKING_TOOL's schema.
+      const marking = toolUse.input as unknown as Marking;
 
       // Trust the mark scheme's total over the model's arithmetic.
       const available = question.marks;
