@@ -94,7 +94,12 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
       progress per paper. Awaiting the image set.
       Auto-tagging is **not needed** — the index already carries topics, marks,
       parts and diagram flags. OCR transcription stays optional.
-- [ ] **Phase 3 — Practice, AI marking, metering.**
+- [~] **Phase 3 — Practice, AI marking, metering.** Practice browser, question
+      view with mark-scheme reveal, self-assessment (localStorage for anonymous,
+      migrating on sign-in). `mark-work` edge function live: Claude Opus 5,
+      adaptive thinking, structured output for the mark breakdown, the marking
+      rubric held in a cached prompt prefix. Charges the ledger before the model
+      call and refunds on failure.
 - [ ] **Phase 4 — Progress tracking.**
 - [ ] **Phase 5 — Polish, Lovable handoff, launch.**
 
@@ -116,5 +121,8 @@ showing them as 0% coverage.
 - **Google OAuth** needs credentials in Supabase → Auth → Providers, with the
   redirect allowlist covering the Netlify domain, deploy previews and
   `localhost`.
-- **Admin role.** Grant yourself one once you have signed in:
-  `insert into user_roles (user_id, role) values ('<your-uuid>', 'admin');`
+- **Admin role.** Granted. Admins bypass the credit ledger entirely
+  (`deduct_credits` returns `admin_bypass`), so marking is free while testing.
+- **Credits for non-admins.** No checkout yet. Grant manually:
+  `select grant_credits('<uuid>', 20, 'manual');`
+- **`generate-hint`** is not built yet — marking is the only AI call so far.

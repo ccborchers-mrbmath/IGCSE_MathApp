@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchQuestionBank } from "@/lib/questionBank";
 import { useProgress, CONFIDENCE_LABELS, type Confidence } from "@/hooks/useProgress";
 import { AppHeader } from "@/components/AppHeader";
+import { MarkWork } from "@/components/MarkWork";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -224,6 +225,11 @@ const QuestionView = () => {
               </Card>
             ))}
         </div>
+
+        <Separator />
+
+        {/* ---- AI marking ---- */}
+        <MarkWork questionId={question.id} marksAvailable={question.marks} />
 
         <Separator />
 
