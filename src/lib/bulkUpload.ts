@@ -5,6 +5,7 @@ import {
   examLabel,
   parseExamFilename,
   questionKey,
+  type ImageKind,
   type ParsedExamFilename,
 } from "@/lib/examFilename";
 
@@ -162,22 +163,34 @@ export async function runBulkUpload(
     try {
       const patch: TablesUpdate<"questions"> = {};
 
-      if (entry.qp) {
-        const path = examImagePath({ ...entry.parsed, kind: "qp" }, entry.qp.name);
+      /**
+       * The file extension is part of the storage path, so re-uploading the
+       * same clip in a different format (a PNG replaced by a JPEG, say)
+       * writes a new object instead of overwriting the old one — leaving the
+       * previous file orphaned in the bucket, still costing storage but no
+       * longer referenced by any question. Remove the superseded object once
+       * the replacement is safely in place.
+       */
+      const putImage = async (file: File, kind: ImageKind, existingPath: string | null) => {
+        const path = examImagePath({ ...entry.parsed, kind }, file.name);
         const { error } = await supabase.storage
           .from(EXAM_BUCKET)
-          .upload(path, entry.qp, { upsert: true, contentType: entry.qp.type || undefined });
+          .upload(path, file, { upsert: true, contentType: file.type || undefined });
         if (error) throw error;
-        patch.question_image_path = path;
-      }
 
+        if (existingPath && existingPath !== path) {
+          // Best effort: the new image is already stored and the row is about
+          // to point at it, so a failed cleanup must not fail the upload.
+          await supabase.storage.from(EXAM_BUCKET).remove([existingPath]);
+        }
+        return path;
+      };
+
+      if (entry.qp) {
+        patch.question_image_path = await putImage(entry.qp, "qp", row.question_image_path);
+      }
       if (entry.ms) {
-        const path = examImagePath({ ...entry.parsed, kind: "ms" }, entry.ms.name);
-        const { error } = await supabase.storage
-          .from(EXAM_BUCKET)
-          .upload(path, entry.ms, { upsert: true, contentType: entry.ms.type || undefined });
-        if (error) throw error;
-        patch.markscheme_image_path = path;
+        patch.markscheme_image_path = await putImage(entry.ms, "ms", row.markscheme_image_path);
       }
 
       // Publish only once both halves are present — a question without its
