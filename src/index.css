@@ -1,0 +1,109 @@
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* Calm, eye-friendly color palette for extended study sessions */
+    --background: 210 28% 95%;
+    --foreground: 215 25% 18%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 215 25% 18%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 25% 18%;
+
+    /* Soft blue - calming and professional */
+    --primary: 210 65% 45%;
+    --primary-foreground: 0 0% 100%;
+    
+    /* Muted teal accent */
+    --accent: 180 50% 40%;
+    --accent-foreground: 0 0% 100%;
+
+    --secondary: 210 25% 88%;
+    --secondary-foreground: 215 25% 18%;
+
+    --muted: 210 22% 90%;
+    --muted-foreground: 215 18% 42%;
+
+    --destructive: 0 65% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 210 22% 78%;
+    --input: 210 22% 86%;
+    --ring: 210 65% 45%;
+
+    --radius: 0.5rem;
+
+    /* Custom design tokens */
+    --soft-blue: 210 65% 45%;
+    --muted-teal: 180 50% 40%;
+    --light-gray: 210 22% 90%;
+    --text-gray: 215 25% 18%;
+    --success: 142 55% 42%;
+    
+    /* Gradients */
+    --gradient-hero: linear-gradient(135deg, hsl(210 65% 45%) 0%, hsl(180 50% 40%) 100%);
+    --gradient-subtle: linear-gradient(180deg, hsl(210 28% 95%) 0%, hsl(210 25% 92%) 100%);
+    
+    /* Shadows */
+    --shadow-card: 0 2px 8px hsl(215 25% 18% / 0.1);
+    --shadow-elevated: 0 6px 20px hsl(215 25% 18% / 0.14);
+    
+    /* Transitions */
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .dark {
+    --background: 215 25% 12%;
+    --foreground: 210 20% 92%;
+
+    --card: 215 20% 16%;
+    --card-foreground: 210 20% 92%;
+
+    --popover: 215 20% 16%;
+    --popover-foreground: 210 20% 92%;
+
+    --primary: 210 60% 60%;
+    --primary-foreground: 0 0% 100%;
+
+    --accent: 180 45% 55%;
+    --accent-foreground: 0 0% 100%;
+
+    --secondary: 215 20% 22%;
+    --secondary-foreground: 210 20% 92%;
+
+    --muted: 215 20% 20%;
+    --muted-foreground: 210 15% 65%;
+
+    --destructive: 0 65% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 215 20% 28%;
+    --input: 215 20% 22%;
+    --ring: 210 60% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-serif;
+  }
+}
+

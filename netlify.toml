@@ -1,0 +1,10 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# React Router is a client-side router: every deep link must be served
+# index.html or a refresh on /practice returns a 404 from the CDN.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
