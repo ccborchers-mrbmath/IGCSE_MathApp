@@ -13,6 +13,7 @@ import { RequireAdmin } from "@/components/RequireAdmin";
 // Everything else splits out. The admin pages matter most: bulk upload pulls
 // in the whole ingestion path, and no student will ever open it.
 const QuestionView = lazy(() => import("./pages/QuestionView"));
+const Progress = lazy(() => import("./pages/Progress"));
 const Auth = lazy(() => import("./pages/Auth"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
@@ -51,6 +52,7 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Practice />} />
             <Route path="/q/:id" element={<QuestionView />} />
+            <Route path="/progress" element={<Progress />} />
             <Route path="/auth" element={<Auth />} />
             <Route
               path="/admin"

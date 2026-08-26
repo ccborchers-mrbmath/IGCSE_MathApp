@@ -127,7 +127,22 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
       nothing. Admin dashboard shows cost per marking, refunded-but-billed
       spend, cache hit rate and median duration.
       Remaining: `generate-hint` must call `record_ai_usage` too when built.
-- [ ] **Phase 4 — Progress tracking.**
+- [~] **Phase 4 — Progress tracking.** `/progress` renders the whole Extended
+      syllabus as a grid: 9 sections, 72 subtopics, banded secure / nearly
+      there / needs work / not attempted / no questions yet. Opening a subtopic
+      shows every question carrying that code, with a NEXT marker on the
+      suggested one (first unattempted, else weakest).
+      **A subtopic is banded on its *attempted* marks, never on coverage** —
+      judging it on all available marks would show red to a student who
+      answered one question perfectly. Coverage is a separate `qDone/qTotal`.
+      **Mark attribution: a question tagged with several codes splits its marks
+      evenly between them.** `question_subtopics` links whole questions, not
+      parts, so nothing finer is available; the even split keeps attributed
+      marks summing back to the paper totals (1,400), where crediting each code
+      the full marks would double-count.
+      Remaining: the grid is built from AI-marked attempts only, so a free user
+      who has only ticked the manual self-assessment boxes sees an all-grey
+      grid. `manual_completions` is not yet folded in.
 - [ ] **Phase 5 — Polish, Lovable handoff, launch.**
 
 Deferred: Paddle checkout, Test Maker, 0580 Core, coaching.

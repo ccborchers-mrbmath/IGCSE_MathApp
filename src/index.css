@@ -58,6 +58,15 @@ All colors MUST be HSL.
     
     /* Shadows */
     --shadow-card: 0 2px 8px hsl(215 25% 18% / 0.1);
+
+    /* Progress bands. One scale used by the grid, the summary tiles and the
+       per-question tiles, so a colour means the same thing everywhere:
+       secure / nearly there / needs work / not attempted / no questions yet. */
+    --band-g-fg: 145 69% 25%;  --band-g-bg: 145 60% 91%;  --band-g-bar: 145 71% 36%;
+    --band-a-fg: 35 90% 28%;   --band-a-bg: 40 85% 92%;   --band-a-bar: 40 87% 47%;
+    --band-r-fg: 0 68% 38%;    --band-r-bg: 0 70% 94%;    --band-r-bar: 0 62% 53%;
+    --band-u-fg: 210 14% 47%;  --band-u-bg: 210 25% 95%;  --band-u-bar: 210 22% 81%;
+    --band-e-fg: 210 15% 62%;                             --band-e-bar: 210 25% 87%;
     --shadow-elevated: 0 6px 20px hsl(215 25% 18% / 0.14);
     
     /* Transitions */
@@ -92,6 +101,12 @@ All colors MUST be HSL.
     --border: 215 20% 28%;
     --input: 215 20% 22%;
     --ring: 210 60% 60%;
+
+    --band-g-fg: 145 62% 61%;  --band-g-bg: 145 47% 14%;  --band-g-bar: 145 65% 38%;
+    --band-a-fg: 40 85% 62%;   --band-a-bg: 40 62% 13%;   --band-a-bar: 40 87% 45%;
+    --band-r-fg: 0 100% 75%;   --band-r-bg: 0 41% 15%;    --band-r-bar: 0 52% 53%;
+    --band-u-fg: 205 18% 62%;  --band-u-bg: 205 25% 14%;  --band-u-bar: 205 28% 27%;
+    --band-e-fg: 205 17% 44%;                             --band-e-bar: 205 35% 21%;
   }
 }
 

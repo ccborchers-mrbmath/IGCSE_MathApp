@@ -19,6 +19,13 @@ export default {
         serif: ['Crimson Text', 'serif'],
       },
       colors: {
+        band: {
+          "g-fg": "hsl(var(--band-g-fg))", "g-bg": "hsl(var(--band-g-bg))", "g-bar": "hsl(var(--band-g-bar))",
+          "a-fg": "hsl(var(--band-a-fg))", "a-bg": "hsl(var(--band-a-bg))", "a-bar": "hsl(var(--band-a-bar))",
+          "r-fg": "hsl(var(--band-r-fg))", "r-bg": "hsl(var(--band-r-bg))", "r-bar": "hsl(var(--band-r-bar))",
+          "u-fg": "hsl(var(--band-u-fg))", "u-bg": "hsl(var(--band-u-bg))", "u-bar": "hsl(var(--band-u-bar))",
+          "e-fg": "hsl(var(--band-e-fg))", "e-bar": "hsl(var(--band-e-bar))",
+        },
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",

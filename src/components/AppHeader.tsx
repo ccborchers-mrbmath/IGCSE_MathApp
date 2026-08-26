@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
-import { Settings, LogOut } from "lucide-react";
+import { Settings, LogOut, BarChart3 } from "lucide-react";
 
 export const AppHeader = () => {
   const { user, isAdmin, loading, signOut } = useAuth();
@@ -17,6 +17,12 @@ export const AppHeader = () => {
         </Link>
 
         <nav className="flex items-center gap-2">
+          <Button asChild variant="ghost" size="sm">
+            <Link to="/progress">
+              <BarChart3 className="mr-2 h-4 w-4" />
+              Progress
+            </Link>
+          </Button>
           {loading ? null : user ? (
             <>
               <span className="hidden text-sm text-muted-foreground sm:inline">{user.email}</span>
