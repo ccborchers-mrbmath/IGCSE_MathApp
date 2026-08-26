@@ -74,6 +74,20 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
 - Do **not** reintroduce signed URLs for exam images. Cambridge re-mints them
   on every boot and auth change, which defeats CDN caching entirely and makes
   every view uncached egress.
+- **Never filter a client query by a list of every row's id.** Parts and
+  subtopic links were once fetched with `.in("question_id", <347 uuids>)`,
+  which put 13 kB in a GET query string and forced a second round trip. RLS
+  already scopes both tables to published questions, so the filter was pure
+  cost. Let RLS do the filtering.
+- **Page every list query.** PostgREST truncates at the project's max-rows
+  setting (1,000) and reports it nowhere the client can see. `question_parts`
+  passes that with one more exam series.
+- **No `@import` for fonts or any external asset in CSS.** The preload scanner
+  cannot see it, so it cannot start until the CSS bundle is parsed. Link it
+  from `index.html` with `preconnect`.
+- Keep routes lazily loaded and vendor chunks split. Students must never
+  download the admin bundle, and `/assets/*` is fingerprinted so it is cached
+  `immutable` while `index.html` must revalidate.
 - Edge functions call the Anthropic API directly. Use structured outputs for
   anything parsed (mark breakdowns, metadata suggestions) and prompt caching
   for the syllabus tree.
