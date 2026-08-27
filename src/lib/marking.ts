@@ -68,7 +68,7 @@ export async function markWork(
   questionId: string,
   files: File[],
 ): Promise<MarkingResult> {
-  if (files.length === 0) throw new Error("Add at least one photo of your working.");
+  if (files.length === 0) throw new Error("Add your working before asking for marks.");
   if (files.length > MAX_WORK_IMAGES) {
     throw new Error(`Please add at most ${MAX_WORK_IMAGES} photos.`);
   }
@@ -103,6 +103,16 @@ export async function markWork(
     throw new Error((data as { error?: string })?.error ?? "Marking failed.");
   }
   return data;
+}
+
+/**
+ * Wrap a canvas export as a File. The storage path takes its extension from
+ * the file name, and the edge function derives the media type it sends to the
+ * model from that same extension — so a blob with no name would be uploaded as
+ * ".jpg" by luck rather than by intent.
+ */
+export function drawnAnswerFile(blob: Blob): File {
+  return new File([blob], `drawn-answer-${Date.now()}.jpg`, { type: "image/jpeg" });
 }
 
 /** The signed-in user's current credit balance, or null if they have no row yet. */

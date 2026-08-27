@@ -1,22 +1,26 @@
 import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { markWork, MAX_WORK_IMAGES, type MarkingResult } from "@/lib/marking";
+import { markWork, drawnAnswerFile, MAX_WORK_IMAGES, type MarkingResult } from "@/lib/marking";
+import { DrawingCanvas, type DrawingCanvasHandle } from "@/components/DrawingCanvas";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { Progress } from "@/components/ui/progress";
-import { Camera, Loader2, X, Sparkles, AlertTriangle, RotateCcw } from "lucide-react";
+import { Camera, Loader2, X, Sparkles, AlertTriangle, RotateCcw, PenLine } from "lucide-react";
 import { toast } from "sonner";
 
 interface Props {
   questionId: string;
   marksAvailable: number;
+  /** Needed by the canvas: students write on the question itself. */
+  questionImageUrl: string | null;
 }
 
-export const MarkWork = ({ questionId, marksAvailable }: Props) => {
+export const MarkWork = ({ questionId, marksAvailable, questionImageUrl }: Props) => {
   const { user } = useAuth();
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -24,6 +28,9 @@ export const MarkWork = ({ questionId, marksAvailable }: Props) => {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<MarkingResult | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [mode, setMode] = useState<"draw" | "photo">("draw");
+  const canvasRef = useRef<DrawingCanvasHandle>(null);
+  const [hasInk, setHasInk] = useState(false);
 
   const addFiles = (list: FileList | null) => {
     if (!list) return;
@@ -48,6 +55,7 @@ export const MarkWork = ({ questionId, marksAvailable }: Props) => {
     setPreviews([]);
     setResult(null);
     setFailure(null);
+    setHasInk(false);
   };
 
   const submit = async () => {
@@ -55,7 +63,15 @@ export const MarkWork = ({ questionId, marksAvailable }: Props) => {
     setBusy(true);
     setFailure(null);
     try {
-      const marked = await markWork(user.id, questionId, files);
+      let payload: File[];
+      if (mode === "draw") {
+        const blob = await canvasRef.current?.exportBlob();
+        if (!blob) throw new Error("Write your answer on the question first.");
+        payload = [drawnAnswerFile(blob)];
+      } else {
+        payload = files;
+      }
+      const marked = await markWork(user.id, questionId, payload);
       setResult(marked);
       toast.success(`${marked.marksAwarded} / ${marked.marksAvailable} marks`);
     } catch (e) {
@@ -187,8 +203,9 @@ export const MarkWork = ({ questionId, marksAvailable }: Props) => {
       <CardHeader>
         <CardTitle className="text-base">Get your work marked</CardTitle>
         <CardDescription>
-          Photograph your working. It is marked against the official mark scheme, part by
-          part, with method and accuracy marks judged the way an examiner would.
+          Write your answer on the question, or photograph working you did on paper. It
+          is marked against the official mark scheme, part by part, with method and
+          accuracy marks judged the way an examiner would.
         </CardDescription>
       </CardHeader>
 
@@ -201,7 +218,29 @@ export const MarkWork = ({ questionId, marksAvailable }: Props) => {
           </Alert>
         )}
 
-        {previews.length > 0 && (
+        <Tabs value={mode} onValueChange={(v) => setMode(v as "draw" | "photo")}>
+          <TabsList className="grid w-full max-w-xs grid-cols-2">
+            <TabsTrigger value="draw" disabled={busy}>
+              <PenLine className="mr-1.5 h-3.5 w-3.5" />
+              Write on it
+            </TabsTrigger>
+            <TabsTrigger value="photo" disabled={busy}>
+              <Camera className="mr-1.5 h-3.5 w-3.5" />
+              Photo
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="draw" className="mt-3">
+            <DrawingCanvas
+              ref={canvasRef}
+              questionImageUrl={questionImageUrl}
+              onInkChange={setHasInk}
+              disabled={busy}
+            />
+          </TabsContent>
+
+          <TabsContent value="photo" className="mt-3 flex flex-col gap-4">
+            {previews.length > 0 && (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {previews.map((src, i) => (
               <div key={src} className="group relative">
@@ -224,26 +263,37 @@ export const MarkWork = ({ questionId, marksAvailable }: Props) => {
           </div>
         )}
 
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          multiple
-          className="hidden"
-          onChange={(e) => addFiles(e.target.files)}
-        />
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              multiple
+              className="hidden"
+              onChange={(e) => addFiles(e.target.files)}
+            />
 
-        <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => inputRef.current?.click()}
+              disabled={busy || files.length >= MAX_WORK_IMAGES}
+              className="self-start"
+            >
+              <Camera className="mr-2 h-4 w-4" />
+              {files.length === 0 ? "Add photos" : "Add another"}
+            </Button>
+
+            <p className="text-xs text-muted-foreground">
+              {files.length}/{MAX_WORK_IMAGES} photos.
+            </p>
+          </TabsContent>
+        </Tabs>
+
+        <div className="flex flex-wrap items-center gap-3">
           <Button
-            variant="outline"
-            onClick={() => inputRef.current?.click()}
-            disabled={busy || files.length >= MAX_WORK_IMAGES}
+            onClick={() => void submit()}
+            disabled={busy || (mode === "draw" ? !hasInk : files.length === 0)}
           >
-            <Camera className="mr-2 h-4 w-4" />
-            {files.length === 0 ? "Add photos" : "Add another"}
-          </Button>
-          <Button onClick={() => void submit()} disabled={busy || files.length === 0}>
             {busy ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : (
@@ -254,8 +304,8 @@ export const MarkWork = ({ questionId, marksAvailable }: Props) => {
         </div>
 
         <p className="text-xs text-muted-foreground">
-          {files.length}/{MAX_WORK_IMAGES} photos. Marking takes up to a minute — it reads
-          your handwriting against the mark scheme rather than just checking the answer.
+          Marking takes up to a minute — it reads your handwriting against the mark scheme
+          rather than just checking the answer.
         </p>
       </CardContent>
     </Card>

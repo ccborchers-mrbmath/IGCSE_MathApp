@@ -229,7 +229,11 @@ const QuestionView = () => {
         <Separator />
 
         {/* ---- AI marking ---- */}
-        <MarkWork questionId={question.id} marksAvailable={question.marks} />
+        <MarkWork
+          questionId={question.id}
+          marksAvailable={question.marks}
+          questionImageUrl={question.questionImageUrl}
+        />
 
         <Separator />
 

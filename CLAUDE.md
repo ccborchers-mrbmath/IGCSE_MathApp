@@ -74,6 +74,14 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
 - Do **not** reintroduce signed URLs for exam images. Cambridge re-mints them
   on every boot and auth change, which defeats CDN caching entirely and makes
   every view uncached egress.
+- **The answer canvas writes on the question, not on a blank page.** The
+  question image is fetched as a blob and drawn into a canvas — never assigned
+  straight to `img.src`, which taints the canvas and makes `toBlob()` throw
+  whatever CORS headers the CDN happens to send.
+- Export the drawn answer flattened onto white at a long edge of ~1600px.
+  Claude downsamples past that, so extra pixels cost bytes and buy nothing —
+  and the same cap is why "Add space" stops: more height shrinks the
+  handwriting in the image the marker actually sees.
 - **Never filter a client query by a list of every row's id.** Parts and
   subtopic links were once fetched with `.in("question_id", <347 uuids>)`,
   which put 13 kB in a GET query string and forced a second round trip. RLS
