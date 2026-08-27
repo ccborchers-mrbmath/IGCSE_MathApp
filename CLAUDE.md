@@ -78,6 +78,16 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
   question image is fetched as a blob and drawn into a canvas — never assigned
   straight to `img.src`, which taints the canvas and makes `toBlob()` throw
   whatever CORS headers the CDN happens to send.
+- **Ink is a filled outline, not a stroked polyline.** `perfect-freehand`
+  turns the samples into one closed ribbon whose width varies along its
+  length, which the canvas anti-aliases as a single shape. Drawing segment by
+  segment leaves visible joins and a dead uniform edge.
+- **Size the canvas backing store in device pixels.** Rendering at CSS
+  resolution and letting the browser scale it up is soft on every tablet.
+- Three stacked surfaces: background (question), ink (committed strokes),
+  overlay (live stroke + selection). The eraser is `destination-out` on the
+  ink layer, which is the only reason it can cut ink without touching the
+  question underneath.
 - Export the drawn answer flattened onto white at a long edge of ~1600px.
   Claude downsamples past that, so extra pixels cost bytes and buy nothing —
   and the same cap is why "Add space" stops: more height shrinks the

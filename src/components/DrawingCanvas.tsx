@@ -3,101 +3,117 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Pen, Eraser, Undo2, Redo2, Trash2, Plus, AlertTriangle } from "lucide-react";
+import { Pen, Eraser, Undo2, Redo2, Trash2, Plus, AlertTriangle, Lasso, BoxSelect } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  ERASER_WIDTH,
+  PEN_WIDTH,
+  groupBounds,
+  paintInk,
+  paintStroke,
+  pointInBounds,
+  rectFrom,
+  strokeInPolygon,
+  strokeInRect,
+  translateStrokes,
+  type Bounds,
+  type Pt,
+  type Stroke,
+} from "@/lib/inking";
 
 /**
- * Draw an answer directly onto the question, the way a student writes on the
+ * Write an answer directly onto the question, the way a student writes on the
  * paper itself.
  *
- * The question image is a locked background layer on its own canvas; ink goes
- * on a transparent canvas stacked above it. Keeping them apart means undo and
- * clear never have to redraw the photograph, and the export can flatten them
- * onto a white base in one pass.
+ * Three stacked surfaces:
+ *   background — white, the question image, and the divider under it
+ *   ink        — every committed stroke, on transparency
+ *   overlay    — the live stroke and the selection UI, cleared every frame
+ *
+ * Ink is separate from the background so an eraser can cut into ink with
+ * destination-out without touching the question. The overlay is separate from
+ * ink so the in-progress stroke and the marching-ants selection can be redrawn
+ * at pointer rate without repainting the committed work underneath.
  */
 
 /** Claude downsamples to ~1568px on the long edge, so exporting much beyond
  *  that spends bytes on detail the marker will never see. */
 const MAX_LONG_EDGE = 1600;
 
-/** Ink width in canvas pixels at full pen pressure. */
-const BASE_WIDTH = 3.2;
-
-/** How much blank working room appears under the question, as a share of the
- *  question's own height. Cambridge answers often need more room than the
- *  paper leaves, and a student cannot turn the page here. */
+/** Blank working room under the question, as a share of its height. */
 const EXTRA_SHARE = 0.3;
 
-/** Stop growing before the long edge costs more legibility than the extra room
- *  is worth — every added pixel of height shrinks the whole image on Claude's
- *  side, including the handwriting. */
+/** Past this the added room shrinks the handwriting more than the room helps. */
 const MAX_TOTAL_HEIGHT = 3200;
 
-interface Point {
-  x: number;
-  y: number;
-  w: number;
-}
-interface Stroke {
-  points: Point[];
-}
+type Tool = "pen" | "eraser" | "lasso" | "rect";
+
+// A real nib and a real eraser, so the pointer says what the tool will do.
+// Hotspots are set to the drawing tip, not the centre of the glyph.
+const PEN_CURSOR =
+  `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 18.1 L13.3 7.9 A2.2 2.2 0 0 1 16.1 10.7 L5.9 20.2 Z' fill='white'/><path d='M2 22 L3.8 18.1 L5.9 20.2 Z' fill='black'/></svg>") 2 22, crosshair`;
+const ERASER_CURSOR =
+  `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 24 24' fill='%23fde68a' stroke='%23111827' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'><path d='M20 20H9L3.5 14.5a2 2 0 0 1 0-2.8L12.7 2.5a2 2 0 0 1 2.8 0l6 6a2 2 0 0 1 0 2.8L13 19'/><path d='M18 13.3 10.7 6'/></svg>") 4 24, crosshair`;
 
 export interface DrawingCanvasHandle {
-  /** Flattened question + ink as a JPEG, or null if nothing has been drawn. */
   exportBlob: () => Promise<Blob | null>;
   hasInk: () => boolean;
 }
 
 interface Props {
   questionImageUrl: string | null;
-  /** Fires whenever the ink changes, so the parent can enable its submit button. */
   onInkChange?: (hasInk: boolean) => void;
   disabled?: boolean;
 }
 
-type Tool = "pen" | "eraser";
-
 export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
   ({ questionImageUrl, onInkChange, disabled }, ref) => {
+    const wrapRef = useRef<HTMLDivElement>(null);
     const bgRef = useRef<HTMLCanvasElement>(null);
     const inkRef = useRef<HTMLCanvasElement>(null);
+    const overlayRef = useRef<HTMLCanvasElement>(null);
     const imageRef = useRef<HTMLImageElement | null>(null);
 
-    const strokes = useRef<Stroke[]>([]);
-    const redo = useRef<Stroke[]>([]);
-    const current = useRef<Stroke | null>(null);
-    const drawingPointer = useRef<number | null>(null);
+    const [strokes, setStrokes] = useState<Stroke[]>([]);
+    const [undoStack, setUndoStack] = useState<Stroke[][]>([]);
+    const [redoStack, setRedoStack] = useState<Stroke[][]>([]);
+    const [selected, setSelected] = useState<number[]>([]);
+    const [tool, setTool] = useState<Tool>("pen");
+    const [extraBlocks, setExtraBlocks] = useState(1);
+    const [size, setSize] = useState<{ w: number; imgH: number } | null>(null);
+    const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+    const [cssWidth, setCssWidth] = useState(0);
 
-    /**
-     * Palm rejection. Once a stylus has been seen we stop treating touch as
-     * drawing — a hand resting on an iPad is a touch, not an answer. Touch then
-     * scrolls the page instead, which is why touch-action changes with it.
-     */
+    // Live, per-frame state lives in refs: a React render per pointer sample
+    // is the single biggest source of input lag on a tablet.
+    const live = useRef<Stroke | null>(null);
+    const lasso = useRef<Pt[] | null>(null);
+    const marquee = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+    const drag = useRef<{ x: number; y: number; dx: number; dy: number } | null>(null);
+    const activePointer = useRef<number | null>(null);
+    const raf = useRef<number | null>(null);
+    const nextId = useRef(1);
+
     const penSeen = useRef(false);
     const [usingPen, setUsingPen] = useState(false);
 
-    const [tool, setTool] = useState<Tool>("pen");
-    const [extraBlocks, setExtraBlocks] = useState(1);
-    const [size, setSize] = useState<{ w: number; h: number; imgH: number } | null>(null);
-    const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
-    const [, forceRender] = useState(0);
-
-    const bump = useCallback(() => {
-      forceRender((n) => n + 1);
-      onInkChange?.(strokes.current.length > 0);
-    }, [onInkChange]);
+    const selectedSet = useMemo(() => new Set(selected), [selected]);
+    const selectionBounds = useMemo(
+      () => (selected.length ? groupBounds(strokes.filter((s) => selectedSet.has(s.id))) : null),
+      [selected, selectedSet, strokes],
+    );
 
     // ---- load the question image ------------------------------------------
-    // Fetched as a blob rather than assigned straight to img.src: a cross
-    // origin image taints the canvas and makes toBlob() throw, and a blob URL
-    // is same-origin by construction so the export always works regardless of
-    // what CORS headers the CDN sends.
+    // Fetched as a blob rather than assigned to img.src: a cross-origin image
+    // taints the canvas and makes toBlob() throw, whatever CORS headers the CDN
+    // sends. A blob URL is same-origin by construction.
     useEffect(() => {
       if (!questionImageUrl) {
         setStatus("error");
@@ -105,112 +121,253 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
       }
       let objectUrl: string | null = null;
       let cancelled = false;
-
       (async () => {
         try {
           const res = await fetch(questionImageUrl);
-          if (!res.ok) throw new Error(`image request failed (${res.status})`);
-          const blob = await res.blob();
-          objectUrl = URL.createObjectURL(blob);
-
+          if (!res.ok) throw new Error(String(res.status));
+          objectUrl = URL.createObjectURL(await res.blob());
           const img = new Image();
           img.src = objectUrl;
           await img.decode();
           if (cancelled) return;
-
           const scale = Math.min(1, MAX_LONG_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
-          const w = Math.round(img.naturalWidth * scale);
-          const imgH = Math.round(img.naturalHeight * scale);
           imageRef.current = img;
-          setSize({ w, h: imgH, imgH });
+          setSize({
+            w: Math.round(img.naturalWidth * scale),
+            imgH: Math.round(img.naturalHeight * scale),
+          });
           setStatus("ready");
         } catch {
           if (!cancelled) setStatus("error");
         }
       })();
-
       return () => {
         cancelled = true;
         if (objectUrl) URL.revokeObjectURL(objectUrl);
       };
     }, [questionImageUrl]);
 
-    // ---- size the canvases and paint the background ------------------------
+    // ---- geometry ------------------------------------------------------------
     const extraH = size ? Math.round(size.imgH * EXTRA_SHARE) : 0;
-    const totalH = size ? Math.min(size.imgH + extraH * extraBlocks, MAX_TOTAL_HEIGHT) : 0;
+    const logicalH = size ? Math.min(size.imgH + extraH * extraBlocks, MAX_TOTAL_HEIGHT) : 0;
+    const logicalW = size?.w ?? 0;
     const canGrow = size ? size.imgH + extraH * (extraBlocks + 1) <= MAX_TOTAL_HEIGHT : false;
 
-    const redrawInk = useCallback(() => {
-      const ink = inkRef.current;
-      if (!ink) return;
-      const ctx = ink.getContext("2d");
+    // Track the displayed width so the backing store can be sized in device
+    // pixels. Rendering at logical size and letting CSS scale it up is the
+    // difference between crisp ink and soft ink on every retina screen.
+    useEffect(() => {
+      const el = wrapRef.current;
+      if (!el) return;
+      const ro = new ResizeObserver(([entry]) => setCssWidth(entry.contentRect.width));
+      ro.observe(el);
+      setCssWidth(el.getBoundingClientRect().width);
+      return () => ro.disconnect();
+    }, [status]);
+
+    const dpr = typeof window === "undefined" ? 1 : Math.min(window.devicePixelRatio || 1, 3);
+    const renderScale = logicalW > 0 && cssWidth > 0 ? (cssWidth * dpr) / logicalW : 1;
+
+    const sizeCanvas = useCallback(
+      (c: HTMLCanvasElement | null) => {
+        if (!c || !logicalW) return null;
+        const w = Math.round(logicalW * renderScale);
+        const h = Math.round(logicalH * renderScale);
+        if (c.width !== w || c.height !== h) {
+          c.width = w;
+          c.height = h;
+        }
+        const ctx = c.getContext("2d");
+        if (!ctx) return null;
+        ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+        return ctx;
+      },
+      [logicalW, logicalH, renderScale],
+    );
+
+    // ---- background ----------------------------------------------------------
+    useEffect(() => {
+      if (status !== "ready" || !size) return;
+      const ctx = sizeCanvas(bgRef.current);
+      const img = imageRef.current;
+      if (!ctx || !img) return;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.clearRect(0, 0, logicalW, logicalH);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, logicalW, logicalH);
+      ctx.drawImage(img, 0, 0, size.w, size.imgH);
+      if (logicalH > size.imgH) {
+        ctx.strokeStyle = "rgba(15,36,56,0.13)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, size.imgH + 0.5);
+        ctx.lineTo(logicalW, size.imgH + 0.5);
+        ctx.stroke();
+      }
+    }, [status, size, sizeCanvas, logicalW, logicalH]);
+
+    // ---- committed ink -------------------------------------------------------
+    const repaintInk = useCallback(() => {
+      const ctx = sizeCanvas(inkRef.current);
       if (!ctx) return;
-      ctx.clearRect(0, 0, ink.width, ink.height);
-      for (const s of strokes.current) drawStroke(ctx, s);
-    }, []);
+      ctx.clearRect(0, 0, logicalW, logicalH);
+      // Strokes being dragged are drawn on the overlay instead, so they can
+      // follow the pointer without repainting this layer every frame.
+      const held = drag.current;
+      paintInk(ctx, held ? strokes.filter((s) => !selectedSet.has(s.id)) : strokes);
+    }, [sizeCanvas, logicalW, logicalH, strokes, selectedSet]);
 
     useEffect(() => {
-      if (!size) return;
-      const bg = bgRef.current;
-      const ink = inkRef.current;
-      const img = imageRef.current;
-      if (!bg || !ink || !img) return;
+      if (status === "ready") repaintInk();
+    }, [status, repaintInk]);
 
-      bg.width = size.w;
-      bg.height = totalH;
-      ink.width = size.w;
-      ink.height = totalH;
+    useEffect(() => {
+      onInkChange?.(strokes.some((s) => s.tool === "pen"));
+    }, [strokes, onInkChange]);
 
-      const ctx = bg.getContext("2d");
-      if (ctx) {
-        // White under everything: the working area below the question must be
-        // paper, and a transparent JPEG would flatten to black.
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, size.w, totalH);
-        ctx.drawImage(img, 0, 0, size.w, size.imgH);
-        if (totalH > size.imgH) {
-          ctx.strokeStyle = "rgba(15,36,56,0.13)";
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(0, size.imgH + 0.5);
-          ctx.lineTo(size.w, size.imgH + 0.5);
-          ctx.stroke();
+    // ---- overlay: live stroke + selection ------------------------------------
+    const paintOverlay = useCallback(() => {
+      raf.current = null;
+      const ctx = sizeCanvas(overlayRef.current);
+      if (!ctx) return;
+      ctx.clearRect(0, 0, logicalW, logicalH);
+
+      const held = drag.current;
+      if (held) {
+        ctx.save();
+        ctx.translate(held.dx, held.dy);
+        for (const s of strokes) if (selectedSet.has(s.id)) paintStroke(ctx, s);
+        ctx.restore();
+      }
+
+      const l = live.current;
+      // An eraser preview cannot be shown here — destination-out on an empty
+      // overlay would erase nothing visible — so it is committed straight to
+      // the ink layer as it moves instead.
+      if (l && l.tool === "pen") paintStroke(ctx, l, true);
+
+      if (lasso.current && lasso.current.length > 1) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(29,111,208,0.9)";
+        ctx.fillStyle = "rgba(29,111,208,0.08)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(lasso.current[0].x, lasso.current[0].y);
+        for (const p of lasso.current.slice(1)) ctx.lineTo(p.x, p.y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      if (marquee.current) {
+        const r = rectFrom(marquee.current.x0, marquee.current.y0, marquee.current.x1, marquee.current.y1);
+        ctx.save();
+        ctx.strokeStyle = "rgba(29,111,208,0.9)";
+        ctx.fillStyle = "rgba(29,111,208,0.08)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        ctx.restore();
+      }
+
+      if (selectionBounds && !lasso.current && !marquee.current) {
+        const b = selectionBounds;
+        const off = held ?? { dx: 0, dy: 0 };
+        ctx.save();
+        ctx.strokeStyle = "rgba(29,111,208,0.95)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 4]);
+        ctx.strokeRect(b.x + off.dx - 4, b.y + off.dy - 4, b.w + 8, b.h + 8);
+        ctx.restore();
+      }
+    }, [sizeCanvas, logicalW, logicalH, strokes, selectedSet, selectionBounds]);
+
+    const scheduleOverlay = useCallback(() => {
+      if (raf.current === null) raf.current = requestAnimationFrame(paintOverlay);
+    }, [paintOverlay]);
+
+    useEffect(() => {
+      if (status === "ready") scheduleOverlay();
+    }, [status, scheduleOverlay]);
+
+    // ---- history --------------------------------------------------------------
+    const commit = useCallback((next: Stroke[]) => {
+      setUndoStack((u) => [...u, strokesRef.current]);
+      setRedoStack([]);
+      setStrokes(next);
+    }, []);
+    // Kept in a ref so `commit` does not need `strokes` in its dependency list,
+    // which would rebuild every pointer handler on every stroke.
+    const strokesRef = useRef<Stroke[]>([]);
+    strokesRef.current = strokes;
+
+    const undo = () => {
+      setUndoStack((u) => {
+        if (!u.length) return u;
+        setRedoStack((r) => [...r, strokesRef.current]);
+        setStrokes(u[u.length - 1]);
+        setSelected([]);
+        return u.slice(0, -1);
+      });
+    };
+    const redo = () => {
+      setRedoStack((r) => {
+        if (!r.length) return r;
+        setUndoStack((u) => [...u, strokesRef.current]);
+        setStrokes(r[r.length - 1]);
+        setSelected([]);
+        return r.slice(0, -1);
+      });
+    };
+    const clearAll = () => {
+      if (!strokes.length) return;
+      commit([]);
+      setSelected([]);
+    };
+    const deleteSelection = useCallback(() => {
+      if (!selected.length) return;
+      const gone = new Set(selected);
+      commit(strokesRef.current.filter((s) => !gone.has(s.id)));
+      setSelected([]);
+    }, [selected, commit]);
+
+    useEffect(() => {
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === "Delete" || e.key === "Backspace") {
+          if (selected.length) {
+            e.preventDefault();
+            deleteSelection();
+          }
+        } else if (e.key === "Escape") {
+          setSelected([]);
         }
-      }
-      redrawInk();
-    }, [size, totalH, redrawInk]);
+      };
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }, [selected, deleteSelection]);
 
-    // ---- pointer handling ---------------------------------------------------
-    const toCanvas = (e: React.PointerEvent<HTMLCanvasElement>) => {
-      const c = inkRef.current!;
+    useEffect(() => {
+      if (tool === "pen" || tool === "eraser") setSelected([]);
+    }, [tool]);
+
+    // ---- pointer ---------------------------------------------------------------
+    const toLogical = (clientX: number, clientY: number) => {
+      const c = overlayRef.current!;
       const r = c.getBoundingClientRect();
-      const scale = c.width / r.width;
-      return { x: (e.clientX - r.left) * scale, y: (e.clientY - r.top) * scale };
+      return {
+        x: ((clientX - r.left) / r.width) * logicalW,
+        y: ((clientY - r.top) / r.height) * logicalH,
+      };
     };
 
-    const widthFor = (e: { pointerType: string; pressure: number }) => {
-      if (e.pointerType !== "pen") return BASE_WIDTH;
-      // Browsers report 0 when a pen gives no pressure reading; 0.5 is the
-      // neutral default the spec suggests for that case.
-      const p = e.pressure > 0 ? e.pressure : 0.5;
-      return BASE_WIDTH * (0.35 + 1.1 * p);
-    };
+    const pressureOf = (e: { pointerType: string; pressure: number }) =>
+      e.pointerType === "pen" && e.pressure > 0 ? e.pressure : 0.5;
 
-    /** True when this event should be ignored as a resting palm. */
     const isPalm = (pointerType: string) => penSeen.current && pointerType === "touch";
-
-    const eraseAt = (x: number, y: number) => {
-      const R = 14;
-      const before = strokes.current.length;
-      strokes.current = strokes.current.filter(
-        (s) => !s.points.some((p) => (p.x - x) ** 2 + (p.y - y) ** 2 < R * R),
-      );
-      if (strokes.current.length !== before) {
-        redo.current = [];
-        redrawInk();
-        bump();
-      }
-    };
 
     const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
       if (disabled || status !== "ready") return;
@@ -221,125 +378,167 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
       if (isPalm(e.pointerType)) return;
       if (e.pointerType === "mouse" && e.button !== 0) return;
 
-      // Capture keeps the stroke attached to this canvas if the pointer wanders
-      // outside it mid-letter. It can throw for a pointer the browser no longer
-      // owns, and an exception here would abandon the stroke before it starts —
-      // losing the capture is survivable, losing the stroke is not.
+      // Capture can throw for a pointer the browser no longer owns. Losing the
+      // capture is survivable; losing the stroke is not.
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
       } catch {
-        /* draw without capture */
+        /* draw uncaptured */
       }
-      drawingPointer.current = e.pointerId;
-      const { x, y } = toCanvas(e);
+      activePointer.current = e.pointerId;
+      const { x, y } = toLogical(e.clientX, e.clientY);
 
-      if (tool === "eraser") {
-        eraseAt(x, y);
+      if (tool === "lasso" || tool === "rect") {
+        // Starting inside an existing selection means "move it", not "start a
+        // new one" — the same gesture every drawing app uses.
+        if (selectionBounds && pointInBounds(x, y, selectionBounds)) {
+          drag.current = { x, y, dx: 0, dy: 0 };
+          repaintInk();
+          scheduleOverlay();
+          return;
+        }
+        setSelected([]);
+        if (tool === "lasso") lasso.current = [{ x, y, p: 0.5 }];
+        else marquee.current = { x0: x, y0: y, x1: x, y1: y };
+        scheduleOverlay();
         return;
       }
-      current.current = { points: [{ x, y, w: widthFor(e) }] };
-      redo.current = [];
+
+      const stroke: Stroke = {
+        id: nextId.current++,
+        tool: tool === "eraser" ? "eraser" : "pen",
+        width: tool === "eraser" ? ERASER_WIDTH : PEN_WIDTH,
+        points: [{ x, y, p: pressureOf(e) }],
+      };
+      live.current = stroke;
+      scheduleOverlay();
     };
 
     const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (drawingPointer.current !== e.pointerId) return;
-      if (isPalm(e.pointerType)) return;
+      if (activePointer.current !== e.pointerId || isPalm(e.pointerType)) return;
+      const { x, y } = toLogical(e.clientX, e.clientY);
 
-      if (tool === "eraser") {
-        const { x, y } = toCanvas(e);
-        eraseAt(x, y);
+      if (drag.current) {
+        drag.current = { ...drag.current, dx: x - drag.current.x, dy: y - drag.current.y };
+        scheduleOverlay();
         return;
       }
-      const stroke = current.current;
-      const ctx = inkRef.current?.getContext("2d");
-      if (!stroke || !ctx) return;
+      if (lasso.current) {
+        lasso.current.push({ x, y, p: 0.5 });
+        scheduleOverlay();
+        return;
+      }
+      if (marquee.current) {
+        marquee.current = { ...marquee.current, x1: x, y1: y };
+        scheduleOverlay();
+        return;
+      }
 
-      // Coalesced events carry the samples the browser batched between frames.
+      const stroke = live.current;
+      if (!stroke) return;
+      // Coalesced samples carry everything the browser batched between frames.
       // A stylus reports far faster than the display refreshes, and using only
-      // the latest event throws that resolution away, which shows up as
-      // straight-line corners in fast handwriting.
-      const events =
+      // the latest event shows up as straight-line corners in fast writing.
+      const batch =
         typeof e.nativeEvent.getCoalescedEvents === "function"
           ? e.nativeEvent.getCoalescedEvents()
-          : [e.nativeEvent];
-
-      for (const ev of events.length ? events : [e.nativeEvent]) {
-        const c = inkRef.current!;
-        const r = c.getBoundingClientRect();
-        const scale = c.width / r.width;
-        const pt: Point = {
-          x: (ev.clientX - r.left) * scale,
-          y: (ev.clientY - r.top) * scale,
-          w: widthFor({ pointerType: ev.pointerType || e.pointerType, pressure: ev.pressure }),
-        };
-        stroke.points.push(pt);
+          : [];
+      const events = batch.length ? batch : [e.nativeEvent];
+      for (const ev of events) {
+        const pt = toLogical(ev.clientX, ev.clientY);
+        stroke.points.push({
+          x: pt.x,
+          y: pt.y,
+          p: pressureOf({ pointerType: ev.pointerType || e.pointerType, pressure: ev.pressure }),
+        });
       }
-      // Repaint just this stroke rather than the whole layer.
-      drawStroke(ctx, stroke);
-    };
 
-    const endStroke = (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (drawingPointer.current !== e.pointerId) return;
-      drawingPointer.current = null;
-      const stroke = current.current;
-      current.current = null;
-      if (stroke && stroke.points.length) {
-        strokes.current.push(stroke);
-        redrawInk();
-        bump();
+      if (stroke.tool === "eraser") {
+        // destination-out has nothing to bite on over on the overlay, so the
+        // eraser is applied to the ink layer as it travels.
+        const ctx = sizeCanvas(inkRef.current);
+        if (ctx) paintStroke(ctx, stroke, true);
       }
+      scheduleOverlay();
     };
 
-    // ---- actions -------------------------------------------------------------
-    const undo = () => {
-      const s = strokes.current.pop();
-      if (!s) return;
-      redo.current.push(s);
-      redrawInk();
-      bump();
-    };
-    const redoLast = () => {
-      const s = redo.current.pop();
-      if (!s) return;
-      strokes.current.push(s);
-      redrawInk();
-      bump();
-    };
-    const clear = () => {
-      if (!strokes.current.length) return;
-      strokes.current = [];
-      redo.current = [];
-      redrawInk();
-      bump();
+    const endPointer = (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (activePointer.current !== e.pointerId) return;
+      activePointer.current = null;
+
+      if (drag.current) {
+        const { dx, dy } = drag.current;
+        drag.current = null;
+        if (dx || dy) commit(translateStrokes(strokesRef.current, selectedSet, dx, dy));
+        else repaintInk();
+        scheduleOverlay();
+        return;
+      }
+
+      if (lasso.current) {
+        const poly = lasso.current;
+        lasso.current = null;
+        if (poly.length > 2) {
+          setSelected(strokes.filter((s) => strokeInPolygon(s, poly)).map((s) => s.id));
+        }
+        scheduleOverlay();
+        return;
+      }
+
+      if (marquee.current) {
+        const m = marquee.current;
+        marquee.current = null;
+        const r: Bounds = rectFrom(m.x0, m.y0, m.x1, m.y1);
+        if (r.w > 3 && r.h > 3) {
+          setSelected(strokes.filter((s) => strokeInRect(s, r)).map((s) => s.id));
+        }
+        scheduleOverlay();
+        return;
+      }
+
+      const stroke = live.current;
+      live.current = null;
+      if (stroke && stroke.points.length) commit([...strokesRef.current, stroke]);
+      scheduleOverlay();
     };
 
+    // ---- export ----------------------------------------------------------------
     useImperativeHandle(ref, () => ({
-      hasInk: () => strokes.current.length > 0,
+      hasInk: () => strokesRef.current.some((s) => s.tool === "pen"),
       exportBlob: async () => {
-        const bg = bgRef.current;
-        const ink = inkRef.current;
-        if (!bg || !ink || !strokes.current.length) return null;
+        const img = imageRef.current;
+        if (!img || !strokesRef.current.some((s) => s.tool === "pen")) return null;
+
+        // Rendered fresh at logical resolution rather than reusing the on-screen
+        // canvases: those are sized for whatever the display happens to be, and
+        // the marker should always get the same, predictable image.
+        const ink = document.createElement("canvas");
+        ink.width = logicalW;
+        ink.height = logicalH;
+        const ictx = ink.getContext("2d");
+        if (!ictx) return null;
+        paintInk(ictx, strokesRef.current);
 
         const out = document.createElement("canvas");
-        out.width = bg.width;
-        out.height = bg.height;
+        out.width = logicalW;
+        out.height = logicalH;
         const ctx = out.getContext("2d");
         if (!ctx) return null;
+        ctx.imageSmoothingQuality = "high";
         ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, out.width, out.height);
-        ctx.drawImage(bg, 0, 0);
+        ctx.fillRect(0, 0, logicalW, logicalH);
+        ctx.drawImage(img, 0, 0, logicalW, size?.imgH ?? logicalH);
         ctx.drawImage(ink, 0, 0);
 
         return new Promise<Blob | null>((resolve) =>
-          // JPEG rather than PNG: the background is a photograph of a printed
-          // page, which PNG stores badly. 0.92 keeps ink edges clean.
+          // JPEG, not PNG: the background is a photograph of a printed page,
+          // which PNG stores badly. 0.92 keeps the ink edges clean.
           out.toBlob((b) => resolve(b), "image/jpeg", 0.92),
         );
       },
     }));
 
     if (status === "loading") return <Skeleton className="h-[28rem] w-full rounded-lg" />;
-
     if (status === "error") {
       return (
         <Alert variant="destructive">
@@ -352,52 +551,54 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
       );
     }
 
-    const hasInk = strokes.current.length > 0;
+    const inked = strokes.some((s) => s.tool === "pen");
+    const cursor =
+      tool === "pen" ? PEN_CURSOR : tool === "eraser" ? ERASER_CURSOR : "crosshair";
+
+    const toolButton = (t: Tool, Icon: typeof Pen, label: string) => (
+      <button
+        key={t}
+        type="button"
+        onClick={() => setTool(t)}
+        aria-pressed={tool === t}
+        title={label}
+        className={cn(
+          "flex items-center gap-1.5 px-3 py-1.5 text-xs",
+          tool === t ? "bg-primary text-primary-foreground" : "hover:bg-accent/10",
+        )}
+      >
+        <Icon className="h-3.5 w-3.5" />
+        {label}
+      </button>
+    );
 
     return (
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-1.5">
-          <div className="inline-flex overflow-hidden rounded-md border">
-            <button
-              type="button"
-              onClick={() => setTool("pen")}
-              aria-pressed={tool === "pen"}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 text-xs",
-                tool === "pen" ? "bg-primary text-primary-foreground" : "hover:bg-accent/10",
-              )}
-            >
-              <Pen className="h-3.5 w-3.5" />
-              Pen
-            </button>
-            <button
-              type="button"
-              onClick={() => setTool("eraser")}
-              aria-pressed={tool === "eraser"}
-              className={cn(
-                "flex items-center gap-1.5 border-l px-3 py-1.5 text-xs",
-                tool === "eraser" ? "bg-primary text-primary-foreground" : "hover:bg-accent/10",
-              )}
-            >
-              <Eraser className="h-3.5 w-3.5" />
-              Eraser
-            </button>
+          <div className="inline-flex divide-x overflow-hidden rounded-md border">
+            {toolButton("pen", Pen, "Pen")}
+            {toolButton("eraser", Eraser, "Eraser")}
+            {toolButton("lasso", Lasso, "Lasso")}
+            {toolButton("rect", BoxSelect, "Select")}
           </div>
 
-          <Button variant="outline" size="sm" onClick={undo} disabled={!hasInk}>
+          <Button variant="outline" size="sm" onClick={undo} disabled={!undoStack.length}>
             <Undo2 className="h-3.5 w-3.5" />
             <span className="sr-only">Undo</span>
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={redoLast}
-            disabled={redo.current.length === 0}
-          >
+          <Button variant="outline" size="sm" onClick={redo} disabled={!redoStack.length}>
             <Redo2 className="h-3.5 w-3.5" />
             <span className="sr-only">Redo</span>
           </Button>
-          <Button variant="outline" size="sm" onClick={clear} disabled={!hasInk}>
+
+          {selected.length > 0 && (
+            <Button variant="outline" size="sm" onClick={deleteSelection}>
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              Delete {selected.length}
+            </Button>
+          )}
+
+          <Button variant="outline" size="sm" onClick={clearAll} disabled={!strokes.length}>
             <Trash2 className="mr-1.5 h-3.5 w-3.5" />
             Clear
           </Button>
@@ -406,74 +607,44 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
             size="sm"
             onClick={() => setExtraBlocks((n) => n + 1)}
             disabled={!canGrow}
-            title={canGrow ? undefined : "Any more space would shrink your handwriting too much to mark reliably."}
+            title={canGrow ? undefined : "More space would shrink your handwriting too much to mark reliably."}
           >
             <Plus className="mr-1.5 h-3.5 w-3.5" />
             Add space
           </Button>
         </div>
 
-        <div className="relative w-full overflow-hidden rounded-lg border bg-white">
-          <canvas ref={bgRef} className="block w-full" />
+        <div ref={wrapRef} className="relative w-full overflow-hidden rounded-lg border bg-white">
+          <canvas ref={bgRef} className="block w-full" style={{ aspectRatio: `${logicalW} / ${logicalH}` }} />
+          <canvas ref={inkRef} className="pointer-events-none absolute inset-0 block h-full w-full" />
           <canvas
-            ref={inkRef}
-            className="absolute inset-0 block w-full"
-            // Before a stylus is seen, a finger draws, so the canvas must
-            // swallow touch gestures. Once one is seen a finger is only ever
-            // used to scroll, so give the gesture back to the page.
-            style={{ touchAction: usingPen ? "pan-y" : "none", cursor: "crosshair" }}
+            ref={overlayRef}
+            className="absolute inset-0 block h-full w-full"
+            // Before a stylus is seen a finger draws, so the canvas must swallow
+            // touch gestures. Once one is seen a finger only ever scrolls, so
+            // give the gesture back to the page.
+            style={{ touchAction: usingPen ? "pan-y" : "none", cursor }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
-            onPointerUp={endStroke}
-            onPointerCancel={endStroke}
-            onPointerLeave={endStroke}
+            onPointerUp={endPointer}
+            onPointerCancel={endPointer}
+            onPointerLeave={endPointer}
           />
         </div>
 
         <p className="text-xs text-muted-foreground">
-          {usingPen
-            ? "Stylus detected — your palm is ignored and a finger scrolls the page."
-            : "Write with a stylus, finger or mouse. A stylus gives the best results."}
+          {selected.length > 0
+            ? `${selected.length} stroke${selected.length === 1 ? "" : "s"} selected — drag to move, or press Delete.`
+            : tool === "lasso"
+              ? "Draw a loop around the working you want to move or delete."
+              : tool === "rect"
+                ? "Drag a box around the working you want to move or delete."
+                : usingPen
+                  ? "Stylus detected — your palm is ignored and a finger scrolls the page."
+                  : "Write with a stylus, finger or mouse. A stylus gives the best results."}
         </p>
       </div>
     );
   },
 );
 DrawingCanvas.displayName = "DrawingCanvas";
-
-/**
- * Paint one stroke. Segments are drawn individually so the width can follow
- * pen pressure along the stroke, with midpoint smoothing so fast handwriting
- * does not come out as a chain of visible straight lines.
- */
-function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke) {
-  const pts = stroke.points;
-  if (!pts.length) return;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = "#101828";
-
-  if (pts.length === 1) {
-    ctx.beginPath();
-    ctx.fillStyle = "#101828";
-    ctx.arc(pts[0].x, pts[0].y, pts[0].w / 2, 0, Math.PI * 2);
-    ctx.fill();
-    return;
-  }
-
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1];
-    const b = pts[i];
-    ctx.beginPath();
-    ctx.lineWidth = (a.w + b.w) / 2;
-    if (i === 1) {
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo((a.x + b.x) / 2, (a.y + b.y) / 2);
-    } else {
-      const prev = pts[i - 2];
-      ctx.moveTo((prev.x + a.x) / 2, (prev.y + a.y) / 2);
-      ctx.quadraticCurveTo(a.x, a.y, (a.x + b.x) / 2, (a.y + b.y) / 2);
-    }
-    ctx.stroke();
-  }
-}
