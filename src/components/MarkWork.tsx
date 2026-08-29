@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { markWork, drawnAnswerFile, MAX_WORK_IMAGES, type MarkingResult } from "@/lib/marking";
 import { DrawingCanvas, type DrawingCanvasHandle } from "@/components/DrawingCanvas";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MathText } from "@/components/MathText";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -152,7 +153,9 @@ export const MarkWork = ({ questionId, marksAvailable, questionImageUrl }: Props
                     {p.marks_awarded}/{p.marks_available}
                   </span>
                 </div>
-                <p className="mt-1.5 text-sm text-muted-foreground">{p.comment}</p>
+                <p className="mt-1.5 text-sm text-muted-foreground">
+                  <MathText>{p.comment}</MathText>
+                </p>
               </div>
             ))}
           </div>
@@ -160,7 +163,9 @@ export const MarkWork = ({ questionId, marksAvailable, questionImageUrl }: Props
           {marking.what_went_well && (
             <div>
               <h4 className="text-sm font-medium">What went well</h4>
-              <p className="mt-1 text-sm text-muted-foreground">{marking.what_went_well}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                <MathText>{marking.what_went_well}</MathText>
+              </p>
             </div>
           )}
 
@@ -169,7 +174,9 @@ export const MarkWork = ({ questionId, marksAvailable, questionImageUrl }: Props
               <h4 className="text-sm font-medium">Where marks were lost</h4>
               <ul className="mt-1 list-disc pl-5 text-sm text-muted-foreground">
                 {marking.errors.map((e, i) => (
-                  <li key={i}>{e}</li>
+                  <li key={i}>
+                    <MathText>{e}</MathText>
+                  </li>
                 ))}
               </ul>
             </div>
@@ -177,7 +184,9 @@ export const MarkWork = ({ questionId, marksAvailable, questionImageUrl }: Props
 
           <div className="rounded-md bg-muted p-3">
             <h4 className="text-sm font-medium">Do this next</h4>
-            <p className="mt-1 text-sm">{marking.next_step}</p>
+            <p className="mt-1 text-sm">
+              <MathText>{marking.next_step}</MathText>
+            </p>
           </div>
 
           <Separator />

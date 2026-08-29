@@ -62,7 +62,9 @@ const MARKING_TOOL = {
             },
             comment: {
               type: "string",
-              description: "One or two sentences: what earned or lost the marks, citing the mark scheme.",
+              description:
+                "One or two sentences: what earned or lost the marks, citing the mark scheme. " +
+                "All mathematics in LaTeX, wrapped in \\( \\).",
             },
           },
           required: ["label", "marks_available", "marks_awarded", "mark_codes", "comment"],
@@ -72,13 +74,21 @@ const MARKING_TOOL = {
       errors: {
         type: "array",
         items: { type: "string" },
-        description: "Short phrases naming each distinct error, e.g. 'sign error when expanding'.",
+        description:
+          "Short phrases naming each distinct error, e.g. 'sign error when expanding \\(-4(x-1)\\)'. " +
+          "All mathematics in LaTeX, wrapped in \\( \\).",
       },
       what_went_well: {
         type: "string",
-        description: "Specific, not generic praise. Empty string if nothing did.",
+        description:
+          "Specific, not generic praise, with all mathematics in LaTeX wrapped in \\( \\). " +
+          "Empty string if nothing did.",
       },
-      next_step: { type: "string", description: "The single most useful thing to do next." },
+      next_step: {
+        type: "string",
+        description:
+          "The single most useful thing to do next, with all mathematics in LaTeX wrapped in \\( \\).",
+      },
       illegible: {
         type: "boolean",
         description: "True only if the work could not be read well enough to mark fairly.",
@@ -149,6 +159,24 @@ Mark what is actually on the page, not what you assume the student meant. Where 
 If the photographs show working for only some parts, mark those parts and award 0 for the parts with no attempt, noting the absence in the comment rather than treating it as an error.
 
 Never award more marks than a part carries, and never award a negative number. The marks you award per part must sum to your total.
+
+## Writing mathematics
+
+Every mathematical expression you write must be LaTeX, wrapped in \\( and \\) so
+the app can typeset it. Use \\[ and \\] instead for a line of working that
+deserves to stand on its own. This is not decoration: the student reads your
+feedback beside a printed exam paper, and it must look like the same subject.
+
+- Fractions are \\frac, never a slash: \\(\\frac{p}{2}\\), not p/2.
+- Multiplication is \\times: \\(3 \\times 15\\), not 3 x 15 or 3*15.
+- Powers and indices use ^ and _: \\(x^2\\), \\(a_1\\).
+- Roots are \\sqrt: \\(\\sqrt{13}\\).
+- Wrap every symbol, however small — a lone \\(x\\) or \\(-4\\) still goes in
+  delimiters, so it is set in maths italic rather than body text.
+- Do not put ordinary words inside the delimiters. Write "expanding
+  \\(-4(x-1)\\) gives \\(-4x+4\\)", not \\(\\text{expanding } -4(x-1)\\).
+- Mark codes (M1, A1, B1, FT, SC) are labels, not maths: leave them as plain
+  text.
 
 ## Writing feedback
 
