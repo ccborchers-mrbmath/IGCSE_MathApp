@@ -82,6 +82,14 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
   turns the samples into one closed ribbon whose width varies along its
   length, which the canvas anti-aliases as a single shape. Drawing segment by
   segment leaves visible joins and a dead uniform edge.
+- **`touch-action` on the canvas is always `none`.** It governs pen as well
+  as touch, so any scrolling value lets the browser claim a stylus stroke as
+  a page drag. Scrolling is done in JS instead: two fingers always pan, and
+  one finger pans once a stylus has been seen.
+- Palm rejection latches on the first pen event *including hover*, since an
+  active stylus announces itself before the nib lands. Never discard the live
+  stroke without checking a finger started it — a palm touching down mid-word
+  would otherwise wipe the pen's stroke.
 - **Size the canvas backing store in device pixels.** Rendering at CSS
   resolution and letting the browser scale it up is soft on every tablet.
 - Three stacked surfaces: background (question), ink (committed strokes),

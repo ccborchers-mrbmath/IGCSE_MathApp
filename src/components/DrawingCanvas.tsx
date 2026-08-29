@@ -94,6 +94,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
     // Live, per-frame state lives in refs: a React render per pointer sample
     // is the single biggest source of input lag on a tablet.
     const live = useRef<Stroke | null>(null);
+    /** Which kind of pointer started the in-progress stroke. */
+    const liveFrom = useRef<string | null>(null);
     const lasso = useRef<Pt[] | null>(null);
     const marquee = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
     const drag = useRef<{ x: number; y: number; dx: number; dy: number } | null>(null);
@@ -101,8 +103,23 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
     const raf = useRef<number | null>(null);
     const nextId = useRef(1);
 
+    /**
+     * Palm rejection and scrolling.
+     *
+     * `penSeen` latches once a stylus has been seen *at all*, including a
+     * hover — an active pen reports hover long before the nib lands, which is
+     * the only way to reject a palm that touches down first.
+     * `penDown` is the stronger, momentary signal: while the nib is on the
+     * glass, no touch is ever ink.
+     */
     const penSeen = useRef(false);
+    const penDown = useRef(false);
     const [usingPen, setUsingPen] = useState(false);
+
+    /** Live touch contacts, so a second finger can be told from the first. */
+    const touches = useRef<Map<number, { x: number; y: number }>>(new Map());
+    /** Last centroid of the panning contacts, in client coordinates. */
+    const panFrom = useRef<{ x: number; y: number } | null>(null);
 
     const selectedSet = useMemo(() => new Set(selected), [selected]);
     const selectionBounds = useMemo(
@@ -367,15 +384,82 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
     const pressureOf = (e: { pointerType: string; pressure: number }) =>
       e.pointerType === "pen" && e.pressure > 0 ? e.pressure : 0.5;
 
-    const isPalm = (pointerType: string) => penSeen.current && pointerType === "touch";
+    /**
+     * A palm spreads far wider than a fingertip. Browsers that do not measure
+     * the contact report 1 (or 0), so the test only fires on a real reading.
+     */
+    const PALM_CONTACT_PX = 45;
+    const looksLikePalm = (e: { width?: number; height?: number }) =>
+      (e.width ?? 0) > PALM_CONTACT_PX || (e.height ?? 0) > PALM_CONTACT_PX;
+
+    /** Should this touch be ignored for drawing? */
+    const rejectTouch = (e: React.PointerEvent) =>
+      e.pointerType === "touch" &&
+      (penSeen.current || penDown.current || looksLikePalm(e));
+
+    /**
+     * Abandon the in-progress stroke, but only if a finger started it.
+     *
+     * The guard is the whole point: a palm landing while the nib is already
+     * writing must not take the pen's stroke down with it. Without the check
+     * this discarded whichever stroke was live — which, mid-word, is the
+     * student's.
+     */
+    const dropStrayTouchStroke = () => {
+      if (liveFrom.current !== "touch" || !live.current) return;
+      live.current = null;
+      liveFrom.current = null;
+      scheduleOverlay();
+    };
+
+    const armPen = () => {
+      if (penSeen.current) return;
+      penSeen.current = true;
+      setUsingPen(true);
+      // A palm may already be drawing when the nib arrives.
+      dropStrayTouchStroke();
+    };
+
+    const centroid = () => {
+      const pts = [...touches.current.values()];
+      if (!pts.length) return null;
+      const x = pts.reduce((t, q) => t + q.x, 0) / pts.length;
+      const y = pts.reduce((t, q) => t + q.y, 0) / pts.length;
+      return { x, y };
+    };
+
+    /** Scroll the page by hand, since touch-action can no longer do it. */
+    const panBy = (dx: number, dy: number) => {
+      const scroller = document.scrollingElement ?? document.documentElement;
+      scroller.scrollLeft -= dx;
+      scroller.scrollTop -= dy;
+    };
 
     const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
       if (disabled || status !== "ready") return;
-      if (e.pointerType === "pen" && !penSeen.current) {
-        penSeen.current = true;
-        setUsingPen(true);
+      if (e.pointerType === "pen") {
+        armPen();
+        penDown.current = true;
       }
-      if (isPalm(e.pointerType)) return;
+
+      if (e.pointerType === "touch") {
+        touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        // Two fingers always means scroll, never draw — and if the first
+        // finger had started a stroke, that was the beginning of this gesture
+        // rather than an answer, so discard it.
+        const twoFingers = touches.current.size >= 2;
+        if (twoFingers || rejectTouch(e)) {
+          dropStrayTouchStroke();
+          // A finger is only ever a scroll once a stylus is in use, so a
+          // single one pans too. Without this, touch-action: none would leave
+          // a tablet unable to scroll the page over the canvas at all.
+          if (twoFingers || penSeen.current || penDown.current) {
+            panFrom.current = centroid();
+          }
+          return;
+        }
+      }
+
       if (e.pointerType === "mouse" && e.button !== 0) return;
 
       // Capture can throw for a pointer the browser no longer owns. Losing the
@@ -411,11 +495,28 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
         points: [{ x, y, p: pressureOf(e) }],
       };
       live.current = stroke;
+      liveFrom.current = e.pointerType;
       scheduleOverlay();
     };
 
     const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (activePointer.current !== e.pointerId || isPalm(e.pointerType)) return;
+      // Hover counts: an active stylus announces itself before it lands, and
+      // that is the only warning a palm resting first will ever give.
+      if (e.pointerType === "pen") armPen();
+
+      if (e.pointerType === "touch" && touches.current.has(e.pointerId)) {
+        touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (panFrom.current) {
+          const c = centroid();
+          if (c) {
+            panBy(c.x - panFrom.current.x, c.y - panFrom.current.y);
+            panFrom.current = c;
+          }
+          return;
+        }
+      }
+
+      if (activePointer.current !== e.pointerId || rejectTouch(e)) return;
       const { x, y } = toLogical(e.clientX, e.clientY);
 
       if (drag.current) {
@@ -463,6 +564,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
     };
 
     const endPointer = (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (e.pointerType === "pen") penDown.current = false;
+      if (e.pointerType === "touch") {
+        touches.current.delete(e.pointerId);
+        panFrom.current = touches.current.size ? centroid() : null;
+      }
       if (activePointer.current !== e.pointerId) return;
       activePointer.current = null;
 
@@ -498,6 +604,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
 
       const stroke = live.current;
       live.current = null;
+      liveFrom.current = null;
       if (stroke && stroke.points.length) commit([...strokesRef.current, stroke]);
       scheduleOverlay();
     };
@@ -620,10 +727,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
           <canvas
             ref={overlayRef}
             className="absolute inset-0 block h-full w-full"
-            // Before a stylus is seen a finger draws, so the canvas must swallow
-            // touch gestures. Once one is seen a finger only ever scrolls, so
-            // give the gesture back to the page.
-            style={{ touchAction: usingPen ? "pan-y" : "none", cursor }}
+            // Never anything but "none". touch-action governs pen as well as
+            // touch, so a scrolling value here lets the browser claim a
+            // stylus stroke as a page drag — which is exactly what "pan-y"
+            // did. Scrolling is handled in JS instead: two fingers always
+            // pan, and one finger pans too once a stylus is in use.
+            style={{ touchAction: "none", cursor, userSelect: "none" }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={endPointer}
@@ -640,8 +749,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
               : tool === "rect"
                 ? "Drag a box around the working you want to move or delete."
                 : usingPen
-                  ? "Stylus detected — your palm is ignored and a finger scrolls the page."
-                  : "Write with a stylus, finger or mouse. A stylus gives the best results."}
+                  ? "Stylus in use — rest your hand on the screen, and swipe with a finger to scroll."
+                  : "Write with a stylus, finger or mouse. Swipe with two fingers to scroll."}
         </p>
       </div>
     );
