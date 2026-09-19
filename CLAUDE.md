@@ -121,6 +121,12 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
   migration: practice search matches the stored text, so a student typing
   "x^2" must still find it, and the index stays readable rather than becoming
   a file of escaped backslashes.
+- **Units are upright, variables italic**, as in print. Telling them apart is
+  the hard part, because `m`, `g` and `s` are also ordinary variable names —
+  the index holds both `convert m^3 to cm^3` and `G=4/5 m^2 n`. A single
+  letter is a unit only on evidence: the description names an unambiguous
+  multi-letter unit, or the unit follows a measured quantity in a run with no
+  `=`. `h` and `l` are never units; the index uses both as variables.
 - **`mathify` only typesets a run containing a real mathematical signal.**
   Units (`m/s`, `km/h`, `rupees/kg`), English either-ors (`max/min`), `3D`,
   `15-gon`, `75th`, `20%` and `$90` must all stay prose. Every change to it

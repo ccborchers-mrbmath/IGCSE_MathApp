@@ -22,6 +22,36 @@ const UNITS = new Set([
   "kmh", "mph", "rad", "deg",
 ]);
 
+/**
+ * Units are upright in print; variables are italic. Telling them apart is the
+ * whole difficulty, because "m", "g" and "s" are also perfectly ordinary
+ * variable names — the index contains both "convert m^3 to cm^3" and
+ * "G=4/5 m^2 n".
+ *
+ * Multi-letter units are never ambiguous: nothing in algebra is called "cm".
+ */
+const MULTI_UNIT = /\b(mm|cm|km|mg|kg|ml|cl|kl|min|hr|mph|kmh)\b(?![A-Za-z])/g;
+
+/**
+ * Single letters are only treated as units on evidence, never by default:
+ * either the description has already named an unambiguous unit — "convert
+ * cm^2 to m^2" is about area throughout — or the unit follows a measured
+ * quantity, as in ">50 g", in a run that is not an equation. An equation is
+ * the one place a lone "m" is far likelier to be a variable.
+ *
+ * "h" and "l" are deliberately absent. They are hours and litres, but the
+ * index uses both as variables ("(h^2+4h)/(h^2-16)"), and getting an
+ * algebraic fraction wrong is worse than leaving an hour italic.
+ */
+const SINGLE_UNIT = /\b(m|g|s)\b(?![A-Za-z])/g;
+const SINGLE_UNIT_AFTER_QUANTITY = /(?<=\d[ ])(m|g|s)\b(?![A-Za-z])/g;
+
+/** Does this description name a unit that could not be anything else? */
+export const namesAUnit = (text: string): boolean => {
+  MULTI_UNIT.lastIndex = 0;
+  return MULTI_UNIT.test(text);
+};
+
 /** Function names that should be upright and spaced, not read as variables. */
 const FUNCTIONS = ["sin", "cos", "tan", "sec", "cosec", "cot", "log", "ln"];
 
@@ -146,7 +176,7 @@ function convertFractions(s: string): string {
  * "125^{(2/3)}" instead of "125^{2/3}" is the difference between looking
  * typeset and looking converted.
  */
-export function toTex(input: string): string {
+export function toTex(input: string, unitsUpright = false): string {
   const groups: string[] = [];
 
   let s = input;
@@ -171,9 +201,13 @@ export function toTex(input: string): string {
     // "root5", "root 5", "root x" and "√7" all mean a square root.
     e = e.replace(new RegExp(`√\\s*(${ATOM})`, "g"), (_, a: string) => `\\sqrt{${a}}`);
     e = e.replace(new RegExp(`\\broot\\s*(${ATOM})`, "g"), (_, a: string) => `\\sqrt{${a}}`);
-    // "cm^2" is square centimetres, not c times m squared. Only multi-letter
-    // units are safe to assume: a lone "m" is as likely to be a variable.
-    e = e.replace(/\b(cm|mm|km|kg|mg|ml|kmh|mph)(?=\^)/g, "\\text{$1}");
+    // Units upright. "cm^2" is square centimetres, not c times m squared.
+    e = e.replace(MULTI_UNIT, "\\text{$1}");
+    if (unitsUpright) {
+      e = e.replace(SINGLE_UNIT, "\\text{$1}");
+    } else if (!expr.includes("=")) {
+      e = e.replace(SINGLE_UNIT_AFTER_QUANTITY, "\\text{$1}");
+    }
     e = convertPowers(e);
     e = convertFractions(e);
     for (const f of FUNCTIONS) {
@@ -238,6 +272,10 @@ function convertText(text: string): string {
 
   // Alternating word / whitespace pieces, so the original spacing can be
   // reproduced exactly for anything left as prose.
+  // Settled once for the whole description, not per run: "convert cm^2 to
+  // m^2" splits into two runs and only the first carries the giveaway.
+  const unitsUpright = namesAUnit(text);
+
   const pieces = text.split(/(\s+)/);
   const isSpace = pieces.map((p) => /^\s+$/.test(p));
   const kinds = pieces.map((p, i) => (isSpace[i] ? "weak" : classify(p)));
@@ -296,7 +334,7 @@ function convertText(text: string): string {
     const body = pieces.slice(from, to + 1).join("");
     // Sentence punctuation belongs outside the mathematics.
     const m = /^([\s\S]*?)([,.;:]*)$/.exec(body)!;
-    const tex = toTex(m[1]);
+    const tex = toTex(m[1], unitsUpright);
     out.push(tex ? `\\(${tex}\\)${m[2]}` : body);
 
     if (to + 1 < end) out.push(pieces.slice(to + 1, end).join(""));
