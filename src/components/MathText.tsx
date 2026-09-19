@@ -41,9 +41,17 @@ function loadRenderer(): Promise<Renderer> {
   return rendererPromise;
 }
 
-export const MathText = ({ children, className }: { children: string; className?: string }) => {
+export const MathText = ({
+  children,
+  className,
+  dollars = true,
+}: {
+  children: string;
+  className?: string;
+  dollars?: boolean;
+}) => {
   const [render, setRender] = useState<Renderer | null>(null);
-  const segments = splitMath(children ?? "");
+  const segments = splitMath(children ?? "", dollars);
   const hasMath = segments.some((s) => s.math);
 
   useEffect(() => {

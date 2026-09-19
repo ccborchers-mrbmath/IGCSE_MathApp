@@ -114,11 +114,24 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
 - Keep routes lazily loaded and vendor chunks split. Students must never
   download the admin bundle, and `/assets/*` is fingerprinted so it is cached
   `immutable` while `index.html` must revalidate.
-- **Marking feedback is LaTeX.** The prompt requires every expression wrapped
-  in `\(…\)`, and `MathText` typesets it with KaTeX, which is loaded on
-  demand so the 78 kB never reaches a student who has not paid for a marking.
-  Feedback saved before this renders as plain text, which is why the parser
-  passes prose through untouched rather than assuming delimiters.
+- **Mathematics is typeset, from two different sources.** Marking feedback is
+  LaTeX at source: the prompt requires every expression wrapped in `\(…\)`.
+  The question index is *not* — it is hand-written plain text ("evaluate
+  125^(2/3)"), so `mathify` converts it at render time. Deliberately not a
+  migration: practice search matches the stored text, so a student typing
+  "x^2" must still find it, and the index stays readable rather than becoming
+  a file of escaped backslashes.
+- **`mathify` only typesets a run containing a real mathematical signal.**
+  Units (`m/s`, `km/h`, `rupees/kg`), English either-ors (`max/min`), `3D`,
+  `15-gon`, `75th`, `20%` and `$90` must all stay prose. Every change to it
+  should be run against the corpus test, which covers the whole index.
+- `MathText` takes `dollars={false}` for index text, because the index
+  contains prices and two of them joined onto one card would otherwise read
+  as one inline expression.
+- KaTeX is loaded on demand and code-split, but it *does* now reach the
+  landing page whenever a visible card carries mathematics. It loads after
+  first paint and the text shows unstyled until it arrives, so it never
+  blocks rendering.
 - Edge functions call the Anthropic API directly. Use structured outputs for
   anything parsed (mark breakdowns, metadata suggestions) and prompt caching
   for the syllabus tree.

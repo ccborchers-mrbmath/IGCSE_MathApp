@@ -10,6 +10,8 @@ import {
   type QuestionFilters,
 } from "@/lib/questionBank";
 import { useProgress, CONFIDENCE_LABELS } from "@/hooks/useProgress";
+import { MathText } from "@/components/MathText";
+import { mathify } from "@/lib/plainMath";
 import { AppHeader } from "@/components/AppHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -271,9 +273,23 @@ const Practice = () => {
                             )}
                           </div>
                           <p className="mt-1.5 text-sm">
-                            {q.summary ??
-                              q.parts.map((p) => p.description).join(" · ") ??
-                              "Question"}
+                            {q.summary ? (
+                              <MathText dollars={false}>{mathify(q.summary)}</MathText>
+                            ) : q.parts.length ? (
+                              // Each part is typeset on its own and only then
+                              // joined: converting the joined string would let
+                              // one part's notation run into the next.
+                              q.parts.map((part, i) => (
+                                <span key={part.position}>
+                                  {i > 0 && " · "}
+                                  <MathText dollars={false}>
+                                    {mathify(part.description)}
+                                  </MathText>
+                                </span>
+                              ))
+                            ) : (
+                              "Question"
+                            )}
                           </p>
                           <div className="mt-1.5 flex flex-wrap gap-1.5">
                             {q.subtopicCodes.map((code) => (

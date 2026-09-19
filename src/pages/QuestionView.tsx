@@ -5,6 +5,8 @@ import { fetchQuestionBank } from "@/lib/questionBank";
 import { useProgress, CONFIDENCE_LABELS, type Confidence } from "@/hooks/useProgress";
 import { AppHeader } from "@/components/AppHeader";
 import { MarkWork } from "@/components/MarkWork";
+import { MathText } from "@/components/MathText";
+import { mathify } from "@/lib/plainMath";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -179,7 +181,9 @@ const QuestionView = () => {
                     <span className="w-12 shrink-0 font-mono text-muted-foreground">
                       {p.label ?? "—"}
                     </span>
-                    <span className="flex-1">{p.description}</span>
+                    <span className="flex-1">
+                      <MathText dollars={false}>{mathify(p.description)}</MathText>
+                    </span>
                     <span className="shrink-0 font-mono tabular-nums text-muted-foreground">
                       [{p.marks}]
                     </span>

@@ -21,11 +21,20 @@ export interface MathSegment {
 const DELIMITERS =
   /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
 
-export function splitMath(input: string): MathSegment[] {
+/** The same, without the dollar forms. */
+const ESCAPED_ONLY = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
+
+/**
+ * `dollars: false` for text that is not written by the marker. The question
+ * index contains prices — "divide $90 in the ratio 2:3" — and two of those
+ * joined into one card would otherwise be read as one inline expression.
+ */
+export function splitMath(input: string, dollars = true): MathSegment[] {
   const out: MathSegment[] = [];
   if (!input) return out;
+  const re = dollars ? DELIMITERS : ESCAPED_ONLY;
   let last = 0;
-  for (const m of input.matchAll(DELIMITERS)) {
+  for (const m of input.matchAll(re)) {
     const at = m.index ?? 0;
     if (at > last) out.push({ math: false, display: false, text: input.slice(last, at) });
     const display = m[1] !== undefined || m[3] !== undefined;
