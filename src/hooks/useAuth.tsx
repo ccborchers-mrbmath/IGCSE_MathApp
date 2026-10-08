@@ -249,11 +249,19 @@ export const useAuth = () => {
    * token is still in the browser's history, and without this, Back and
    * reload within the hour would put the form back into recovery mode for
    * whoever is at the keyboard next.
+   *
+   * `currentPassword` goes to the server, which checks it when Supabase's
+   * "Require current password" is on. A reset link's session is exempt, so
+   * recovery sends none.
    */
-  const updatePassword = async (password: string) => {
+  const updatePassword = async (password: string, currentPassword?: string) => {
     const wasRecovering = authState.recovering;
     const email = authState.user?.email;
-    const { error } = await supabase.auth.updateUser({ password, data: { has_password: true } });
+    const { error } = await supabase.auth.updateUser({
+      password,
+      ...(currentPassword ? { current_password: currentPassword } : {}),
+      data: { has_password: true },
+    });
     if (error) return { error, signedIn: true };
     endRecovery();
     updateAuthState({ recovering: false });
