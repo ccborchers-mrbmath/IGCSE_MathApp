@@ -19,25 +19,15 @@ interface Props {
   marksAvailable: number;
   /** Needed by the canvas: students write on the question itself. */
   questionImageUrl: string | null;
-  /** A result already returned for this question, shown instead of a fresh page. */
-  savedResult?: MarkingResult | null;
-  /** Told of every new result, and of null when the student starts again. */
-  onResult?: (result: MarkingResult | null) => void;
 }
 
-export const MarkWork = ({
-  questionId,
-  marksAvailable,
-  questionImageUrl,
-  savedResult,
-  onResult,
-}: Props) => {
+export const MarkWork = ({ questionId, marksAvailable, questionImageUrl }: Props) => {
   const { user } = useAuth();
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<MarkingResult | null>(savedResult ?? null);
+  const [result, setResult] = useState<MarkingResult | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [mode, setMode] = useState<"draw" | "photo">("draw");
   const canvasRef = useRef<DrawingCanvasHandle>(null);
@@ -65,7 +55,6 @@ export const MarkWork = ({
     setFiles([]);
     setPreviews([]);
     setResult(null);
-    onResult?.(null);
     setFailure(null);
     setHasInk(false);
   };
@@ -85,7 +74,6 @@ export const MarkWork = ({
       }
       const marked = await markWork(user.id, questionId, payload);
       setResult(marked);
-      onResult?.(marked);
       toast.success(`${marked.marksAwarded} / ${marked.marksAvailable} marks`);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Marking failed.";
@@ -252,7 +240,10 @@ export const MarkWork = ({
           </TabsList>
 
           <TabsContent value="draw" className="mt-3">
+            {/* Keyed so each question starts on a fresh page: ink and the room
+                opened in it belong to the question they were written on. */}
             <DrawingCanvas
+              key={questionId}
               ref={canvasRef}
               questionImageUrl={questionImageUrl}
               onInkChange={setHasInk}

@@ -117,17 +117,25 @@ function extentOf(s: Stroke): Extent | null {
     if (p.y < y0) y0 = p.y;
     if (p.y > y1) y1 = p.y;
   }
-  // perfect-freehand draws a ribbon 1.6 widths across, so a full width of
-  // padding clears it on every side.
-  return { x0: x0 - s.width, x1: x1 + s.width, y0: y0 - s.width, y1: y1 + s.width };
+  // perfect-freehand's ribbon reaches at most 1.24 widths from the centre
+  // line (size 1.6w, thinning 0.55, full stylus pressure), caps included.
+  // Padding by exactly that keeps a real gap between lines of writing clear.
+  const pad = Math.ceil(s.width * 1.25);
+  return { x0: x0 - pad, x1: x1 + pad, y0: y0 - pad, y1: y1 + pad };
 }
 
 /**
- * Lines of writing, for the rare cut that cannot avoid the ink: strokes that
- * touch, and strokes side by side on the same line, end up in one group.
- * An eraser joins the ink it overlaps, so it can never be parted from it.
+ * Group strokes that must never be parted: the strokes of one character —
+ * a fraction's numerator, bar and denominator, the dot over a recurring
+ * digit, a 5's flag, a decimal point — and the characters of one line.
+ *
+ * Parts of a character are near each other relative to their size, so two
+ * strokes join when the gap between them is small next to the taller one.
+ * Words on a line share most of their height and sit a few character-heights
+ * apart at most. An eraser joins the ink it overlaps, so it is never parted
+ * from what it rubbed out.
  */
-function writingLines(ext: (Extent | null)[]): number[] {
+function inkUnits(ext: (Extent | null)[]): number[] {
   const parent = ext.map((_, i) => i);
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
   for (let i = 0; i < ext.length; i++) {
@@ -136,15 +144,14 @@ function writingLines(ext: (Extent | null)[]): number[] {
     for (let j = i + 1; j < ext.length; j++) {
       const b = ext[j];
       if (!b) continue;
-      const overlapY = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
-      if (overlapY < 0) continue;
+      const ha = a.y1 - a.y0;
+      const hb = b.y1 - b.y0;
       const gapX = Math.max(a.x0, b.x0) - Math.min(a.x1, b.x1);
-      const shorter = Math.min(a.y1 - a.y0, b.y1 - b.y0);
-      const touching = gapX <= 0;
-      // Words on one line share most of their height and sit a few
-      // character-heights apart at most.
-      const sameLine = overlapY >= shorter * 0.5 && gapX <= Math.max(a.y1 - a.y0, b.y1 - b.y0) * 3;
-      if (touching || sameLine) parent[find(i)] = find(j);
+      const gapY = Math.max(a.y0, b.y0) - Math.min(a.y1, b.y1);
+      const near = Math.min(24, Math.max(6, 0.4 * Math.max(ha, hb)));
+      const parts = gapX <= near && gapY <= near;
+      const sameLine = -gapY >= Math.min(ha, hb) * 0.5 && gapX <= Math.max(ha, hb) * 3;
+      if (parts || sameLine) parent[find(i)] = find(j);
     }
   }
   return ext.map((_, i) => find(i));
@@ -154,15 +161,14 @@ function writingLines(ext: (Extent | null)[]): number[] {
  * Open `h` of room above an answer line, without tearing anything written.
  *
  * The room can open at any row of blank paper above the line, so it opens at
- * one that no stroke crosses: at the + if that row is clear, else at the
- * nearest clear row below it, else above. Every stroke is then wholly above
- * the cut or wholly below it — a character is never split from its other
- * strokes, a line of working never split from itself, and an eraser never
- * parted from the ink it rubbed out.
+ * one that no group of writing crosses: at the + if that row is clear, else
+ * at the nearest clear row below it, else above. Every character and every
+ * line of writing is then wholly above the cut or wholly below it.
  *
- * Only when ink covers every blank row does a cut have to cross some; then
- * whole lines of writing move or stay together, by which side their middle
- * is on.
+ * Only when writing covers every blank row must the cut cross some. Then each
+ * group it crosses moves or stays whole: with the line if it reaches down to
+ * the line's print — it is the answer — otherwise by which side its middle is
+ * on. Everything the cut does not cross goes with the print under it.
  */
 export function openRoom(
   strokes: Stroke[],
@@ -172,9 +178,22 @@ export function openRoom(
 ): { strokes: Stroke[]; gaps: Gap[] } {
   const ext = strokes.map(extentOf);
   const bandTop = pageTopOf(gaps, line.top - line.room);
-  const bandBottom = toPageY(gaps, line.top) - 1;
+  const printTop = toPageY(gaps, line.top);
+  const bandBottom = printTop - 1;
   const preferred = Math.min(bandBottom, Math.max(bandTop, buttonPageY(gaps, line)));
-  const clear = (y: number) => ext.every((e) => !e || y < e.y0 || y > e.y1);
+
+  // Grouping spans the whole page: a line of working that starts over the
+  // question text is still one line. It chains only through writing that is
+  // close together, so ink drawn elsewhere — a graph above — stays separate.
+  const unit = inkUnits(ext);
+  const span = new Map<number, { y0: number; y1: number }>();
+  ext.forEach((e, i) => {
+    if (!e) return;
+    const u = span.get(unit[i]);
+    span.set(unit[i], u ? { y0: Math.min(u.y0, e.y0), y1: Math.max(u.y1, e.y1) } : { y0: e.y0, y1: e.y1 });
+  });
+  const spans = [...span.values()];
+  const clear = (y: number) => spans.every((u) => y < u.y0 || y > u.y1);
 
   let cut: number | null = null;
   for (let y = preferred; y <= bandBottom && cut === null; y++) if (clear(y)) cut = y;
@@ -187,16 +206,15 @@ export function openRoom(
   } else {
     const y = preferred;
     cut = y;
-    const group = writingLines(ext);
-    const top = new Map<number, number>();
-    const bottom = new Map<number, number>();
-    ext.forEach((e, i) => {
-      if (!e) return;
-      const g = group[i];
-      top.set(g, Math.min(top.get(g) ?? Infinity, e.y0));
-      bottom.set(g, Math.max(bottom.get(g) ?? -Infinity, e.y1));
-    });
-    moves = (i) => ext[i] !== null && (top.get(group[i])! + bottom.get(group[i])!) / 2 >= y;
+    const decided = new Map<number, boolean>();
+    for (const [id, u] of span) {
+      if (u.y0 <= y && u.y1 >= y) decided.set(id, u.y1 >= printTop || (u.y0 + u.y1) / 2 >= y);
+    }
+    moves = (i) => {
+      const e = ext[i];
+      if (!e) return false;
+      return decided.get(unit[i]) ?? e.y0 > y;
+    };
   }
 
   return {
@@ -378,7 +396,7 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
    * beside a figure has print on every row above it, and there is no row
    * where the page can be parted without splitting the figure.
    */
-  const bridge = Math.max(2, Math.round(W * 0.004));
+  const bridge = Math.max(3, Math.round(W * 0.004));
   const textTop = (l: Line): number | null => {
     const limit = Math.max(0, Math.round(l.y - W * 0.035));
     let y = l.y;
@@ -388,14 +406,29 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
         y--;
         continue;
       }
+      // Measure the whole blank run, even past the limit: a short run that
+      // the limit happens to cut through is still a gap inside one object.
       let blank = 1;
-      while (blank < bridge && y - 1 - blank >= limit && !rowPrinted(y - 1 - blank)) blank++;
-      if (blank < bridge && y - 1 - blank >= limit) {
+      while (blank < bridge && y - 1 - blank >= 0 && !rowPrinted(y - 1 - blank)) blank++;
+      if (blank < bridge && y - 1 - blank >= 0) {
         y -= blank;
         continue;
       }
       return y;
     }
+  };
+
+  /**
+   * Does the print carry on straight under the line? An answer line's own
+   * text stops within a descender or two — "y", "[2]", the "dx" of dy/dx. A
+   * table's rules and a figure's edges run on well past that, and a leader
+   * among them has nowhere to cut that would not split them.
+   */
+  const continuesBelow = (l: Line) => {
+    let y = l.bottom + descender + 1;
+    if (y >= H || !rowPrinted(y)) return false;
+    while (y + 1 < H && rowPrinted(y + 1)) y++;
+    return y - l.bottom > descender * 2;
   };
 
   /** Blank rows directly above an image row. */
@@ -423,7 +456,7 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
   const answers: AnswerLine[] = [];
   let prev: { line: Line; top: number } | null = null;
   for (const l of isolated) {
-    const top = textTop(l);
+    const top = continuesBelow(l) ? null : textTop(l);
     if (top === null) {
       prev = null;
       continue;

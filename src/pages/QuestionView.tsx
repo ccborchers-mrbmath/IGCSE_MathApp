@@ -5,7 +5,6 @@ import { fetchQuestionBank } from "@/lib/questionBank";
 import { useProgress, CONFIDENCE_LABELS, type Confidence } from "@/hooks/useProgress";
 import { AppHeader } from "@/components/AppHeader";
 import { MarkWork } from "@/components/MarkWork";
-import type { MarkingResult } from "@/lib/marking";
 import { MathText } from "@/components/MathText";
 import { mathify } from "@/lib/plainMath";
 import { Button } from "@/components/ui/button";
@@ -36,9 +35,6 @@ const QuestionView = () => {
   });
   const { progress, setConfidence, isLocalOnly } = useProgress();
   const [showMarkscheme, setShowMarkscheme] = useState(false);
-  // Marking results by question, kept above the keyed MarkWork: a paid result
-  // that lands after the student has moved on is still there when they return.
-  const [results, setResults] = useState<Record<string, MarkingResult>>({});
 
   const { question, prev, next } = useMemo(() => {
     if (!data || !id) return { question: null, prev: null, next: null };
@@ -237,21 +233,10 @@ const QuestionView = () => {
         <Separator />
 
         {/* ---- AI marking ---- */}
-        {/* Keyed so moving to another question starts a fresh page: ink,
-            inserted room and photos all belong to this one. */}
         <MarkWork
-          key={question.id}
           questionId={question.id}
           marksAvailable={question.marks}
           questionImageUrl={question.questionImageUrl}
-          savedResult={results[question.id] ?? null}
-          onResult={(r) => {
-            const qid = question.id;
-            setResults((all) => {
-              const { [qid]: _, ...rest } = all;
-              return r ? { ...rest, [qid]: r } : rest;
-            });
-          }}
         />
 
         <Separator />

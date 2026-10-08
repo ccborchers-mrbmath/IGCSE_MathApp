@@ -113,6 +113,9 @@ function answerLines(img: HTMLImageElement, w: number, h: number): AnswerLine[] 
     probe.height = h;
     const ctx = probe.getContext("2d", { willReadFrequently: true });
     if (!ctx) return [];
+    // A tall question is shrunk to fit; high-quality scaling keeps the thin
+    // strokes — an arrow over "PQ" — that the detector steps over.
+    ctx.imageSmoothingQuality = "high";
     ctx.drawImage(img, 0, 0, w, h);
     return findAnswerLines(ctx.getImageData(0, 0, w, h));
   } catch {
@@ -186,6 +189,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
 
     /** The press in progress on a + button, so a palm or a scroll is not taken for a tap. */
     const tap = useRef<{ stray: boolean; touch: boolean; at: number } | null>(null);
+    /**
+     * The + a mouse or stylus is over. Tracked by pointer type rather than
+     * :hover, which a touchscreen leaves stuck on the last thing tapped.
+     */
+    const [previewing, setPreviewing] = useState<number | null>(null);
 
     /** Live touch contacts, so a second finger can be told from the first. */
     const touches = useRef<Map<number, { x: number; y: number }>>(new Map());
@@ -766,6 +774,15 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
     }
 
     const inked = strokes.some((s) => s.tool === "pen");
+
+    // Neighbouring parts can sit closer than a + is tall at phone width. A
+    // crowded + steps sideways, unless the one above it already has.
+    const steppedButtons: boolean[] = [];
+    lines.forEach((line, i) => {
+      const cssY = (buttonPageY(gaps, line) * cssWidth) / logicalW;
+      const prevY = i > 0 ? (buttonPageY(gaps, lines[i - 1]) * cssWidth) / logicalW : -Infinity;
+      steppedButtons.push(cssY - prevY < 32 && !steppedButtons[i - 1]);
+    });
     const cursor =
       tool === "pen" ? PEN_CURSOR : tool === "eraser" ? ERASER_CURSOR : "crosshair";
 
@@ -854,72 +871,91 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
             onPointerLeave={endPointer}
           />
 
-          {lines.map((line) => (
-            <div
-              key={line.top}
-              className="pointer-events-none absolute inset-x-0"
-              style={{ top: `${(buttonPageY(gaps, line) / logicalH) * 100}%` }}
-            >
-              <button
-                type="button"
-                aria-label="Add working space above this answer line"
-                title={canInsert ? "Add working space here" : TOO_TALL}
-                // Disabled outright only while marking, when the canvas ignores
-                // input too. At the height cap it stays pressable so a tap
-                // explains itself instead of falling through as ink.
-                disabled={disabled}
-                aria-disabled={!canInsert}
-                onPointerDown={(e) => {
-                  tap.current = {
-                    // The nib on the glass, a palm-sized contact, or another
-                    // finger already down (a scroll) is never a tap.
-                    stray:
-                      e.pointerType === "touch" &&
-                      (penDown.current || looksLikePalm(e) || touches.current.size >= 2),
-                    touch: e.pointerType === "touch",
-                    at: e.timeStamp,
-                  };
-                }}
-                onClick={(e) => {
-                  const t = tap.current;
-                  tap.current = null;
-                  // A keyboard press has no pointer behind it (detail 0). A
-                  // touch held long once a stylus is in use is a palm that
-                  // settled on the margin, not a fingertip.
-                  const fromPointer = e.detail > 0;
-                  if (
-                    fromPointer &&
-                    t &&
-                    (t.stray || (t.touch && penSeen.current && e.timeStamp - t.at > LONG_PRESS_MS))
-                  ) {
-                    return;
-                  }
-                  if (!canInsert) {
-                    toast(TOO_TALL);
-                    return;
-                  }
-                  insertSpace(line);
-                }}
-                // As on the canvas: a press here is never claimed by the
-                // browser as a page drag.
-                style={{ touchAction: "none" }}
-                className={cn(
-                  "peer pointer-events-auto absolute left-1 top-0 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-dashed bg-white/90 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
-                  canInsert
-                    ? // Hover only where hover exists: a touchscreen leaves
-                      // :hover on the last thing tapped.
-                      "border-primary/70 text-primary [@media(hover:hover)]:hover:bg-primary [@media(hover:hover)]:hover:text-primary-foreground"
-                    : "cursor-not-allowed border-muted-foreground/40 text-muted-foreground/60",
-                )}
+          {lines.map((line, i) => {
+            const stepped = steppedButtons[i];
+            const lit = previewing === line.top && canInsert;
+            return (
+              <div
+                key={line.top}
+                className="pointer-events-none absolute inset-x-0"
+                style={{ top: `${(buttonPageY(gaps, line) / logicalH) * 100}%` }}
               >
-                <Plus className="h-4 w-4" />
-              </button>
-              {/* Where the room opens, shown before it does. */}
-              {canInsert && (
-                <div className="absolute left-9 right-2 top-0 border-t border-dashed border-primary/60 opacity-0 transition-opacity peer-focus-visible:opacity-100 [@media(hover:hover)]:peer-hover:opacity-100" />
-              )}
-            </div>
-          ))}
+                <button
+                  type="button"
+                  aria-label="Add working space above this answer line"
+                  title={canInsert ? "Add working space here" : TOO_TALL}
+                  // Disabled outright only while marking, when the canvas ignores
+                  // input too. At the height cap it stays pressable so a tap
+                  // explains itself instead of falling through as ink.
+                  disabled={disabled}
+                  aria-disabled={!canInsert}
+                  onPointerEnter={(e) => {
+                    if (e.pointerType !== "touch") setPreviewing(line.top);
+                  }}
+                  onPointerLeave={() => setPreviewing(null)}
+                  onPointerDown={(e) => {
+                    tap.current = {
+                      // The nib on the glass, a palm-sized contact, or another
+                      // finger already down (a scroll) is never a tap.
+                      stray:
+                        e.pointerType === "touch" &&
+                        (penDown.current || looksLikePalm(e) || touches.current.size >= 2),
+                      touch: e.pointerType === "touch",
+                      at: e.timeStamp,
+                    };
+                  }}
+                  onClick={(e) => {
+                    const t = tap.current;
+                    tap.current = null;
+                    // A keyboard press has no pointer behind it (detail 0).
+                    const fromPointer = e.detail > 0;
+                    // A tapped button keeps focus, and the next key pressed
+                    // anywhere would light its focus ring; only the keyboard
+                    // should leave it focused.
+                    if (fromPointer) e.currentTarget.blur();
+                    // A touch held long once a stylus is in use is a palm that
+                    // settled on the margin, not a fingertip.
+                    if (
+                      fromPointer &&
+                      t &&
+                      (t.stray || (t.touch && penSeen.current && e.timeStamp - t.at > LONG_PRESS_MS))
+                    ) {
+                      return;
+                    }
+                    if (!canInsert) {
+                      toast(TOO_TALL);
+                      return;
+                    }
+                    insertSpace(line);
+                  }}
+                  // As on the canvas: a press here is never claimed by the
+                  // browser as a page drag.
+                  style={{ touchAction: "none" }}
+                  className={cn(
+                    "peer pointer-events-auto absolute top-0 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-dashed shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+                    stepped ? "left-9" : "left-1",
+                    !canInsert
+                      ? "cursor-not-allowed border-muted-foreground/40 bg-white/90 text-muted-foreground/60"
+                      : lit
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-primary/70 bg-white/90 text-primary",
+                  )}
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+                {/* Where the room opens, shown before it does. */}
+                {canInsert && (
+                  <div
+                    className={cn(
+                      "absolute right-2 top-0 border-t border-dashed border-primary/60 transition-opacity peer-focus-visible:opacity-100",
+                      stepped ? "left-[4.25rem]" : "left-9",
+                      lit ? "opacity-100" : "opacity-0",
+                    )}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
 
         <p className="text-xs text-muted-foreground">
