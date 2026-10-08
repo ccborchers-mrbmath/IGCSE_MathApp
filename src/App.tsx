@@ -1,12 +1,13 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation, useNavigate } from "react-router-dom";
 import { Skeleton } from "@/components/ui/skeleton";
 import Practice from "./pages/Practice";
 import { RequireAdmin } from "@/components/RequireAdmin";
+import { PASSWORD_PATH, useAuth } from "@/hooks/useAuth";
 
 // Practice is the landing route, so it stays in the entry chunk — lazily
 // loading the first thing every visitor sees would only add a round trip.
@@ -15,6 +16,7 @@ import { RequireAdmin } from "@/components/RequireAdmin";
 const QuestionView = lazy(() => import("./pages/QuestionView"));
 const Progress = lazy(() => import("./pages/Progress"));
 const Auth = lazy(() => import("./pages/Auth"));
+const AccountPassword = lazy(() => import("./pages/AccountPassword"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
 const BulkUpload = lazy(() => import("./pages/admin/BulkUpload"));
@@ -35,6 +37,20 @@ const queryClient = new QueryClient({
   },
 });
 
+/**
+ * A reset link that the redirect allowlist rejects lands on the Site URL
+ * instead of the set-password page. Wherever it lands, send it on.
+ */
+const RecoveryRedirect = () => {
+  const { recovering } = useAuth();
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (recovering && pathname !== PASSWORD_PATH) navigate(PASSWORD_PATH, { replace: true });
+  }, [recovering, pathname, navigate]);
+  return null;
+};
+
 const RouteFallback = () => (
   <div className="mx-auto flex max-w-4xl flex-col gap-4 px-6 py-8">
     <Skeleton className="h-8 w-64" />
@@ -48,12 +64,14 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter>
+        <RecoveryRedirect />
         <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="/" element={<Practice />} />
             <Route path="/q/:id" element={<QuestionView />} />
             <Route path="/progress" element={<Progress />} />
             <Route path="/auth" element={<Auth />} />
+            <Route path={PASSWORD_PATH} element={<AccountPassword />} />
             <Route
               path="/admin"
               element={

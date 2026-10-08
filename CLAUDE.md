@@ -128,6 +128,13 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
   press while the nib is down, or a touch held past half a second. Its
   highlight follows mouse and stylus pointers, never `:hover`, which a
   touchscreen leaves stuck on the last thing tapped.
+- **Password recovery is trusted only from Supabase's `PASSWORD_RECOVERY`
+  event**, which fires after the reset link's token is verified, and only
+  recovery mode skips the current-password check. The URL is never evidence:
+  anyone with an open session can type `#type=recovery`. The listener is
+  registered when `useAuth` loads, not on first render, because the client
+  verifies the link as soon as it is created and a late subscriber never
+  hears the event.
 - **Never filter a client query by a list of every row's id.** Parts and
   subtopic links were once fetched with `.in("question_id", <347 uuids>)`,
   which put 13 kB in a GET query string and forced a second round trip. RLS
@@ -248,6 +255,13 @@ showing them as 0% coverage.
 - **Leaked-password protection** is off. One toggle in Supabase → Auth →
   Providers, flagged by the security advisor.
 - **`generate-hint`** is not built yet — marking is the only AI call so far.
+- **Password reset emails.** In Supabase → Auth → URL Configuration, the Site
+  URL must be `https://igcsemathapp.netlify.app`, and Redirect URLs should list
+  `https://igcsemathapp.netlify.app/account/password` (plus localhost and the
+  deploy-preview pattern). A link the allowlist rejects falls back to the Site
+  URL, which the app also handles. Supabase's built-in sender is for testing
+  only — heavily rate-limited, and it delivers only to the project team's own
+  addresses — so students need custom SMTP before launch.
 - **Answer-line detection is unproven on the full corpus.** Checked on one
   real question (Q14, with a graph grid) at nine scales and four JPEG
   qualities, and on synthetic pages built from it: stacked and tightly spaced
