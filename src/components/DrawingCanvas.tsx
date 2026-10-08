@@ -27,13 +27,23 @@ import {
   type Pt,
   type Stroke,
 } from "@/lib/inking";
+import {
+  findAnswerCuts,
+  gapTotal,
+  imageBands,
+  insertGap,
+  shiftStrokesBelow,
+  toPageY,
+  type Gap,
+} from "@/lib/answerSpace";
 
 /**
  * Write an answer directly onto the question, the way a student writes on the
  * paper itself.
  *
  * Three stacked surfaces:
- *   background — white, the question image, and the divider under it
+ *   background — white, the question image (cut into bands around any room
+ *                opened above an answer line), and the divider under it
  *   ink        — every committed stroke, on transparency
  *   overlay    — the live stroke and the selection UI, cleared every frame
  *
@@ -50,8 +60,13 @@ const MAX_LONG_EDGE = 1600;
 /** Blank working room under the question, as a share of its height. */
 const EXTRA_SHARE = 0.3;
 
+/** Room opened above an answer line, as a share of the page width: about
+ *  five lines of handwriting. */
+const INSERT_SHARE = 0.2;
+
 /** Past this the added room shrinks the handwriting more than the room helps. */
 const MAX_TOTAL_HEIGHT = 3200;
+const TOO_TALL = "More space would shrink your handwriting too much to mark reliably.";
 
 type Tool = "pen" | "eraser" | "lasso" | "rect";
 
@@ -61,6 +76,52 @@ const PEN_CURSOR =
   `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 18.1 L13.3 7.9 A2.2 2.2 0 0 1 16.1 10.7 L5.9 20.2 Z' fill='white'/><path d='M2 22 L3.8 18.1 L5.9 20.2 Z' fill='black'/></svg>") 2 22, crosshair`;
 const ERASER_CURSOR =
   `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 24 24' fill='%23fde68a' stroke='%23111827' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'><path d='M20 20H9L3.5 14.5a2 2 0 0 1 0-2.8L12.7 2.5a2 2 0 0 1 2.8 0l6 6a2 2 0 0 1 0 2.8L13 19'/><path d='M18 13.3 10.7 6'/></svg>") 4 24, crosshair`;
+
+/**
+ * White page, then the question in bands, each pushed down by the room opened
+ * above it. Shared by the screen and the export so the marker sees exactly the
+ * page the student wrote on.
+ */
+function paintQuestion(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  size: { w: number; imgH: number },
+  gaps: Gap[],
+  pageH: number,
+) {
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, size.w, pageH);
+  const ky = img.naturalHeight / size.imgH;
+  for (const b of imageBands(gaps, size.imgH)) {
+    ctx.drawImage(img, 0, b.srcY * ky, img.naturalWidth, b.srcH * ky, 0, b.dstY, size.w, b.srcH);
+  }
+}
+
+/**
+ * Find the answer lines by reading the question's own pixels. Runs once per
+ * question, in a few tens of milliseconds. Should the image be unreadable,
+ * the canvas simply offers no buttons — never an error.
+ */
+function answerCuts(img: HTMLImageElement, w: number, h: number): number[] {
+  try {
+    const probe = document.createElement("canvas");
+    probe.width = w;
+    probe.height = h;
+    const ctx = probe.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return [];
+    ctx.drawImage(img, 0, 0, w, h);
+    return findAnswerCuts(ctx.getImageData(0, 0, w, h));
+  } catch {
+    return [];
+  }
+}
+
+/** Everything undo can take back: the ink, and the room it is written in. */
+interface Snapshot {
+  strokes: Stroke[];
+  gaps: Gap[];
+  extraBlocks: number;
+}
 
 export interface DrawingCanvasHandle {
   exportBlob: () => Promise<Blob | null>;
@@ -82,11 +143,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
     const imageRef = useRef<HTMLImageElement | null>(null);
 
     const [strokes, setStrokes] = useState<Stroke[]>([]);
-    const [undoStack, setUndoStack] = useState<Stroke[][]>([]);
-    const [redoStack, setRedoStack] = useState<Stroke[][]>([]);
+    const [undoStack, setUndoStack] = useState<Snapshot[]>([]);
+    const [redoStack, setRedoStack] = useState<Snapshot[]>([]);
     const [selected, setSelected] = useState<number[]>([]);
     const [tool, setTool] = useState<Tool>("pen");
     const [extraBlocks, setExtraBlocks] = useState(1);
+    const [gaps, setGaps] = useState<Gap[]>([]);
+    /** Where the question can be cut to open room: just above each answer line. */
+    const [cuts, setCuts] = useState<number[]>([]);
     const [size, setSize] = useState<{ w: number; imgH: number } | null>(null);
     const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
     const [cssWidth, setCssWidth] = useState(0);
@@ -115,6 +179,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
     const penSeen = useRef(false);
     const penDown = useRef(false);
     const [usingPen, setUsingPen] = useState(false);
+
+    /** Set when a touch on a room button looks like a resting palm, not a tap. */
+    const strayTap = useRef(false);
 
     /** Live touch contacts, so a second finger can be told from the first. */
     const touches = useRef<Map<number, { x: number; y: number }>>(new Map());
@@ -148,11 +215,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
           await img.decode();
           if (cancelled) return;
           const scale = Math.min(1, MAX_LONG_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
+          const w = Math.round(img.naturalWidth * scale);
+          const imgH = Math.round(img.naturalHeight * scale);
           imageRef.current = img;
-          setSize({
-            w: Math.round(img.naturalWidth * scale),
-            imgH: Math.round(img.naturalHeight * scale),
-          });
+          setCuts(answerCuts(img, w, imgH));
+          setSize({ w, imgH });
           setStatus("ready");
         } catch {
           if (!cancelled) setStatus("error");
@@ -166,9 +233,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
 
     // ---- geometry ------------------------------------------------------------
     const extraH = size ? Math.round(size.imgH * EXTRA_SHARE) : 0;
-    const logicalH = size ? Math.min(size.imgH + extraH * extraBlocks, MAX_TOTAL_HEIGHT) : 0;
+    const insertH = size ? Math.round(size.w * INSERT_SHARE) : 0;
+    /** Bottom of the question on the page, below any room opened inside it. */
+    const questionBottom = size ? size.imgH + gapTotal(gaps) : 0;
+    const pageH = questionBottom + extraH * extraBlocks;
+    const logicalH = Math.min(pageH, MAX_TOTAL_HEIGHT);
     const logicalW = size?.w ?? 0;
-    const canGrow = size ? size.imgH + extraH * (extraBlocks + 1) <= MAX_TOTAL_HEIGHT : false;
+    const canGrow = size ? pageH + extraH <= MAX_TOTAL_HEIGHT : false;
+    const canInsert = size ? pageH + insertH <= MAX_TOTAL_HEIGHT : false;
 
     // Track the displayed width so the backing store can be sized in device
     // pixels. Rendering at logical size and letting CSS scale it up is the
@@ -211,18 +283,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "high";
       ctx.clearRect(0, 0, logicalW, logicalH);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, logicalW, logicalH);
-      ctx.drawImage(img, 0, 0, size.w, size.imgH);
-      if (logicalH > size.imgH) {
+      paintQuestion(ctx, img, size, gaps, logicalH);
+      if (logicalH > questionBottom) {
         ctx.strokeStyle = "rgba(15,36,56,0.13)";
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(0, size.imgH + 0.5);
-        ctx.lineTo(logicalW, size.imgH + 0.5);
+        ctx.moveTo(0, questionBottom + 0.5);
+        ctx.lineTo(logicalW, questionBottom + 0.5);
         ctx.stroke();
       }
-    }, [status, size, sizeCanvas, logicalW, logicalH]);
+    }, [status, size, sizeCanvas, logicalW, logicalH, gaps, questionBottom]);
 
     // ---- committed ink -------------------------------------------------------
     const repaintInk = useCallback(() => {
@@ -312,32 +382,55 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
     }, [status, scheduleOverlay]);
 
     // ---- history --------------------------------------------------------------
-    const commit = useCallback((next: Stroke[]) => {
-      setUndoStack((u) => [...u, strokesRef.current]);
-      setRedoStack([]);
-      setStrokes(next);
-    }, []);
-    // Kept in a ref so `commit` does not need `strokes` in its dependency list,
+    // Opening room moves ink, so the room is part of every snapshot: undoing
+    // a stroke must never put it back on a page laid out differently.
+    // Kept in refs so `commit` does not need the state in its dependency list,
     // which would rebuild every pointer handler on every stroke.
     const strokesRef = useRef<Stroke[]>([]);
     strokesRef.current = strokes;
+    const roomRef = useRef({ gaps, extraBlocks });
+    roomRef.current = { gaps, extraBlocks };
+
+    const snapshot = (): Snapshot => ({ strokes: strokesRef.current, ...roomRef.current });
+    const restore = (s: Snapshot) => {
+      setStrokes(s.strokes);
+      setGaps(s.gaps);
+      setExtraBlocks(s.extraBlocks);
+      setSelected([]);
+    };
+
+    const commit = useCallback((next: Stroke[], room?: Partial<Omit<Snapshot, "strokes">>) => {
+      const before: Snapshot = { strokes: strokesRef.current, ...roomRef.current };
+      setUndoStack((u) => [...u, before]);
+      setRedoStack([]);
+      setStrokes(next);
+      if (room?.gaps) setGaps(room.gaps);
+      if (room?.extraBlocks !== undefined) setExtraBlocks(room.extraBlocks);
+    }, []);
 
     const undo = () => {
-      setUndoStack((u) => {
-        if (!u.length) return u;
-        setRedoStack((r) => [...r, strokesRef.current]);
-        setStrokes(u[u.length - 1]);
-        setSelected([]);
-        return u.slice(0, -1);
-      });
+      if (!undoStack.length) return;
+      setRedoStack((r) => [...r, snapshot()]);
+      restore(undoStack[undoStack.length - 1]);
+      setUndoStack(undoStack.slice(0, -1));
     };
     const redo = () => {
-      setRedoStack((r) => {
-        if (!r.length) return r;
-        setUndoStack((u) => [...u, strokesRef.current]);
-        setStrokes(r[r.length - 1]);
-        setSelected([]);
-        return r.slice(0, -1);
+      if (!redoStack.length) return;
+      setUndoStack((u) => [...u, snapshot()]);
+      restore(redoStack[redoStack.length - 1]);
+      setRedoStack(redoStack.slice(0, -1));
+    };
+
+    /**
+     * Open room just above an answer line. The printed page below the cut and
+     * the answer written on it move down together; the working above stays.
+     */
+    const insertSpace = (at: number) => {
+      if (!canInsert) return;
+      const room = roomRef.current;
+      const pageY = toPageY(room.gaps, at);
+      commit(shiftStrokesBelow(strokesRef.current, pageY, insertH), {
+        gaps: insertGap(room.gaps, at, insertH),
       });
     };
     const clearAll = () => {
@@ -632,9 +725,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
         const ctx = out.getContext("2d");
         if (!ctx) return null;
         ctx.imageSmoothingQuality = "high";
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, logicalW, logicalH);
-        ctx.drawImage(img, 0, 0, logicalW, size?.imgH ?? logicalH);
+        if (size) paintQuestion(ctx, img, size, roomRef.current.gaps, logicalH);
         ctx.drawImage(ink, 0, 0);
 
         return new Promise<Blob | null>((resolve) =>
@@ -712,9 +803,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setExtraBlocks((n) => n + 1)}
+            onClick={() => commit(strokesRef.current, { extraBlocks: extraBlocks + 1 })}
             disabled={!canGrow}
-            title={canGrow ? undefined : "More space would shrink your handwriting too much to mark reliably."}
+            title={canGrow ? "Add room below the question" : TOO_TALL}
           >
             <Plus className="mr-1.5 h-3.5 w-3.5" />
             Add space
@@ -739,6 +830,38 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
             onPointerCancel={endPointer}
             onPointerLeave={endPointer}
           />
+
+          {cuts.map((at) => (
+            <div
+              key={at}
+              className="pointer-events-none absolute inset-x-0"
+              style={{ top: `${(toPageY(gaps, at) / logicalH) * 100}%` }}
+            >
+              <button
+                type="button"
+                aria-label="Add working space above this answer line"
+                title={canInsert ? "Add working space here" : TOO_TALL}
+                disabled={disabled || !canInsert}
+                // A palm resting on the margin must not open space, so once a
+                // stylus is in use a touch here is ignored, as it is for ink.
+                onPointerDown={(e) => {
+                  strayTap.current = rejectTouch(e);
+                }}
+                onClick={() => {
+                  if (strayTap.current) {
+                    strayTap.current = false;
+                    return;
+                  }
+                  insertSpace(at);
+                }}
+                className="peer pointer-events-auto absolute left-1 top-0 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-dashed border-primary/70 bg-white/90 text-primary shadow-sm transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+              {/* Where the cut falls, shown before it is made. */}
+              <div className="absolute left-9 right-2 top-0 border-t border-dashed border-primary/60 opacity-0 transition-opacity peer-hover:opacity-100 peer-focus-visible:opacity-100" />
+            </div>
+          ))}
         </div>
 
         <p className="text-xs text-muted-foreground">
@@ -748,9 +871,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
               ? "Draw a loop around the working you want to move or delete."
               : tool === "rect"
                 ? "Drag a box around the working you want to move or delete."
-                : usingPen
-                  ? "Stylus in use — rest your hand on the screen, and swipe with a finger to scroll."
-                  : "Write with a stylus, finger or mouse. Swipe with two fingers to scroll."}
+                : (usingPen
+                    ? "Stylus in use — rest your hand on the screen, and swipe with a finger to scroll."
+                    : "Write with a stylus, finger or mouse. Swipe with two fingers to scroll.") +
+                  (cuts.length ? " Tap + beside an answer line for more room." : "")}
         </p>
       </div>
     );

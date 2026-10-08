@@ -100,6 +100,17 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
   Claude downsamples past that, so extra pixels cost bytes and buy nothing —
   and the same cap is why "Add space" stops: more height shrinks the
   handwriting in the image the marker actually sees.
+- **Room above an answer line is a cut in the question, not an overlay.** The
+  image is drawn in bands with blank gaps between them, so the printed line
+  and the answer on it move down together while the working above stays.
+  Gaps are in every undo snapshot, because opening one moves ink. A stroke
+  goes with whichever side of the cut its vertical midpoint is on —
+  handwriting rises above the printed text, so testing its top would strand
+  "2.3" above the dots it was written on.
+- **Answer lines are found from the pixels, not stored.** A Cambridge leader is
+  a run of tiny, evenly pitched dots; a dotted graph grid line looks the same
+  along its row but has grid lines running into it, and nothing printed ever
+  touches a leader. Every threshold is a share of the page width.
 - **Never filter a client query by a list of every row's id.** Parts and
   subtopic links were once fetched with `.in("question_id", <347 uuids>)`,
   which put 13 kB in a GET query string and forced a second round trip. RLS
@@ -220,3 +231,7 @@ showing them as 0% coverage.
 - **Leaked-password protection** is off. One toggle in Supabase → Auth →
   Providers, flagged by the security advisor.
 - **`generate-hint`** is not built yet — marking is the only AI call so far.
+- **Answer-line detection is unproven on the full corpus.** Checked on one
+  question (Q14, with a graph grid) at five scales and two JPEG qualities, plus
+  composited stacked and tightly spaced lines. Run `findAnswerCuts` over all
+  347 question images before relying on it on every paper.
