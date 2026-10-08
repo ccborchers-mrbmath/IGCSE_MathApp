@@ -11,12 +11,16 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 const Auth = () => {
-  const { user, loading, signInWithGoogle, signInWithEmail, signUpWithEmail } = useAuth();
+  const { user, loading, signInWithGoogle, signInWithEmail, signUpWithEmail, sendPasswordReset } =
+    useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [view, setView] = useState<"signin" | "reset" | "sent">(
+    searchParams.get("reset") ? "reset" : "signin",
+  );
 
   const redirect = searchParams.get("redirect") ?? "/";
 
@@ -56,6 +60,75 @@ const Auth = () => {
       toast.success("Check your inbox to confirm your email address.");
     }
   };
+
+  const handleReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email) {
+      toast.error("Enter your email address.");
+      return;
+    }
+    setBusy(true);
+    const { error } = await sendPasswordReset(email);
+    setBusy(false);
+    // Supabase answers an unknown address at once, and only a real account
+    // can hit the resend limit or a failed send. Showing those errors would
+    // tell anyone which addresses have accounts, so they read as sent; only
+    // a malformed address or a dropped connection is reported.
+    const reportable =
+      error && (!error.status || error.code === "email_address_invalid" || error.code === "validation_failed");
+    if (reportable) {
+      toast.error(error.message);
+      return;
+    }
+    setView("sent");
+  };
+
+  if (view !== "signin") {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background px-6 py-12">
+        <Card className="w-full max-w-sm">
+          <CardHeader>
+            <CardTitle>{view === "sent" ? "Check your email" : "Reset your password"}</CardTitle>
+            <CardDescription>
+              {view === "sent"
+                ? // Worded the same whether or not the address has an account, so
+                  // the form cannot be used to find out who has signed up.
+                  `If ${email} has an account, a link to set a new password is on its way. It works once and expires, so use it soon — and check your spam folder. If you asked a moment ago, wait a minute before asking again.`
+                : "Enter the email address you signed up with and we'll send you a link to set a new password."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {view === "reset" ? (
+              <form className="flex flex-col gap-3" onSubmit={(e) => void handleReset(e)}>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="reset-email">Email</Label>
+                  <Input
+                    id="reset-email"
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                  />
+                </div>
+                <Button type="submit" className="w-full" disabled={busy}>
+                  {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Send reset link
+                </Button>
+                <Button type="button" variant="ghost" className="w-full" onClick={() => setView("signin")}>
+                  Back to sign in
+                </Button>
+              </form>
+            ) : (
+              <Button variant="outline" className="w-full" onClick={() => setView("signin")}>
+                Back to sign in
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-6 py-12">
@@ -107,7 +180,7 @@ const Auth = () => {
                 />
               </div>
 
-              <TabsContent value="signin" className="mt-1">
+              <TabsContent value="signin" className="mt-1 flex flex-col gap-1">
                 <Button
                   className="w-full"
                   onClick={() => void handleEmail("signin")}
@@ -115,6 +188,15 @@ const Auth = () => {
                 >
                   {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Sign in
+                </Button>
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  className="self-center text-muted-foreground"
+                  onClick={() => setView("reset")}
+                >
+                  Forgot password?
                 </Button>
               </TabsContent>
               <TabsContent value="signup" className="mt-1">

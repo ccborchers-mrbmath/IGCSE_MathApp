@@ -128,6 +128,26 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
   press while the nib is down, or a touch held past half a second. Its
   highlight follows mouse and stylus pointers, never `:hover`, which a
   touchscreen leaves stuck on the last thing tapped.
+- **Recovery mode (no current password asked) is narrow on purpose.** The
+  client fires `PASSWORD_RECOVERY` for *any* URL carrying a valid access token
+  and `type=recovery` — the reset link replayed from browser history included,
+  since its token outlives the reset — and broadcasts it to every open tab.
+  So it is honoured only in the tab the link opened in, pinned to that link's
+  user and `session_id`, and ended by any password change or session change.
+  Saving the new password revokes the link's session (`signOut({ scope:
+  "local" })`) and signs in afresh, so a replayed link no longer works. Kept
+  per tab in `sessionStorage` so a reload does not ask for the forgotten
+  password. The listener starts when `useAuth` loads, not on first render: the
+  client verifies the link as soon as it is created.
+- **The current-password check is a browser safeguard, not a server lock.**
+  Anyone holding a session can call `updateUser` directly. Supabase's "Secure
+  password change" (Auth settings) makes the server demand a recent sign-in;
+  the change form signs in with the current password just before updating,
+  so it still works with that on.
+- **The reset form never reveals who has an account.** Supabase answers an
+  unknown address at once; only a real account hits the resend limit or a
+  failed send. Those errors read as "sent" — only a malformed address or a
+  dropped connection is shown.
 - **Never filter a client query by a list of every row's id.** Parts and
   subtopic links were once fetched with `.in("question_id", <347 uuids>)`,
   which put 13 kB in a GET query string and forced a second round trip. RLS
@@ -248,9 +268,22 @@ showing them as 0% coverage.
 - **Leaked-password protection** is off. One toggle in Supabase → Auth →
   Providers, flagged by the security advisor.
 - **`generate-hint`** is not built yet — marking is the only AI call so far.
-- **Answer-line detection is unproven on the full corpus.** Checked on one
-  real question (Q14, with a graph grid) at nine scales and four JPEG
-  qualities, and on synthetic pages built from it: stacked and tightly spaced
-  lines, sub-part lists, coordinates, vector arrows, probability trees,
-  diagrams beside a line, tables. Run `findAnswerLines` over all 347 question
-  images before relying on it on every paper.
+- **Password reset emails.** In Supabase → Auth → URL Configuration, the Site
+  URL must be `https://igcsemathapp.netlify.app`, and Redirect URLs should list
+  `https://igcsemathapp.netlify.app/account/password` (plus localhost and the
+  deploy-preview pattern). A link the allowlist rejects falls back to the Site
+  URL, which the app also handles. Supabase's built-in sender is for testing
+  only — heavily rate-limited, and it delivers only to the project team's own
+  addresses — so students need custom SMTP before launch. Turn on "Secure
+  password change" too (see Conventions).
+- **Answer-line detection, checked on all 347 stored question images** (every
+  overlay looked at): 324 get a +, none sits in the wrong place or cuts
+  through print, and grids, tables and diagrams get none. A labelled pair like
+  "box A …kg" over "box B …kg" gets one + per line, by choice.
+- **27 stored question images are cropped too short at the bottom**, and in 14
+  the answer line is cut off entirely, so no + can appear: Feb-Mar 42 q06;
+  May-Jun 22 q13 (ii)(b), 23 q16, 42 q21 (b); Oct-Nov 21 q03, q06 (b), q13,
+  q17 (b); Oct-Nov 23 q26 (b), q28; Oct-Nov 41 q21, q24 (d); Oct-Nov 43 q04 (b),
+  q26 (b). The other 13 clip only the mark: Feb-Mar 42 q14, q17; May-Jun 22
+  q19, 42 q26, 43 q26; Oct-Nov 41 q15, q29; Oct-Nov 42 q10, q11, q14, q15, q16;
+  Oct-Nov 43 q10. Re-crop them at ingestion.

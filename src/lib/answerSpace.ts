@@ -339,30 +339,87 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
 
   // A dotted grid line looks just like a leader along its own row. What gives
   // it away is the grid's vertical lines running into it, from both sides
-  // inside the grid and from one side along its border. Nothing printed ever
-  // touches a leader: the space over it is where the student writes.
+  // inside the grid and from one side along its border — all along its
+  // length. Print set right against a leader touches it in a place or two
+  // only: the "or" between two leaders, a unit after them. The chain of dots
+  // can even run on into such a word's lower strokes, so being touched there
+  // must not cost the whole line.
   const touched = (l: Line) => {
     const reach = Math.max(2, Math.round(W * 0.0035));
+    /** Print just above or below the dots in this column — two pixels clear
+     *  of them, so their own anti-aliased edge and JPEG halo do not count. */
+    const touchAt = (x: number) => {
+      for (let k = 2; k <= reach + 1; k++) {
+        const up = l.y - k;
+        const down = l.bottom + k;
+        if ((up >= 0 && lum[up * W + x] < PRINT) || (down < H && lum[down * W + x] < PRINT)) return true;
+      }
+      return false;
+    };
+
     const seen = new Uint8Array(W);
     let columns = 0;
-    let hits = 0;
+    const hitColumns: number[] = [];
     for (const [x0, x1] of l.spans) {
       for (let x = x0; x <= x1; x++) {
         if (seen[x]) continue;
         seen[x] = 1;
         columns++;
-        // Two pixels clear of the dots, so their own anti-aliased edge and
-        // JPEG halo do not count.
-        let hit = false;
-        for (let k = 2; k <= reach + 1 && !hit; k++) {
-          const up = l.y - k;
-          const down = l.bottom + k;
-          hit = (up >= 0 && lum[up * W + x] < PRINT) || (down < H && lum[down * W + x] < PRINT);
-        }
-        if (hit) hits++;
+        if (touchAt(x)) hitColumns.push(x);
       }
     }
-    return hits > Math.max(3, columns * 0.01);
+    if (hitColumns.length <= Math.max(3, columns * 0.01)) return false;
+
+    hitColumns.sort((a, b) => a - b);
+    const places: [number, number][] = [];
+    for (const x of hitColumns) {
+      const last = places[places.length - 1];
+      if (last && x - last[1] <= maxDot * 2) last[1] = x;
+      else places.push([x, x]);
+    }
+
+    // A word is several characters wide; a grid line touching the dots is a
+    // pixel or two. A word at the end of the chain shows only a sliver inside
+    // it, so follow the print outward — across the gaps between letters and
+    // the hollow of an "o", up to a dot's width — until it is clearly wider
+    // than any grid line. The faintest grid lines are far further apart.
+    const minWord = Math.max(4, W * 0.006);
+    const letterGap = Math.max(3, maxDot);
+    const maxWord = W * 0.04;
+    const isWord = ([a, b]: [number, number]) => {
+      let lo = a;
+      let hi = b;
+      for (let x = a - 1, gap = 0; x >= 0 && hi - lo < minWord && gap <= letterGap; x--) {
+        if (touchAt(x)) {
+          lo = x;
+          gap = 0;
+        } else gap++;
+      }
+      for (let x = b + 1, gap = 0; x < W && hi - lo < minWord && gap <= letterGap; x++) {
+        if (touchAt(x)) {
+          hi = x;
+          gap = 0;
+        } else gap++;
+      }
+      return hi - lo >= minWord;
+    };
+    const words = places.filter(isWord);
+    // Thin touches are grid lines — or a lone glyph: the "(" and "," of a
+    // coordinate, a one-letter unit. A grid touches its rows every few
+    // millimetres; one or two glyphs touch a leader far apart, if at all.
+    // A faint grid touching its own border in three places is still a grid.
+    const thinPlaces = places.filter((p) => !words.includes(p));
+    let thin = 0;
+    for (const [a, b] of thinPlaces) thin += b - a + 1;
+    const fewGlyphs =
+      thinPlaces.length <= 2 &&
+      (thinPlaces.length < 2 || thinPlaces[1][0] - thinPlaces[0][1] >= W * 0.08);
+    return !(
+      words.length <= 3 &&
+      words.every(([a, b]) => b - a <= maxWord) &&
+      (thin <= Math.max(3, columns * 0.01) || fewGlyphs) &&
+      hitColumns.length <= columns * 0.2
+    );
   };
   const lines = found.filter((l) => !touched(l));
 
@@ -420,13 +477,12 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
 
   /**
    * Does the print carry on straight under the line? An answer line's own
-   * text stops within a descender or two — "y", "[2]", the "dx" of dy/dx. A
-   * table's rules and a figure's edges run on well past that, and a leader
-   * among them has nowhere to cut that would not split them.
+   * text stops within a descender or two — "y", "[2]", the "dx" of dy/dx —
+   * and the next part's text starts after a blank row. A table's rules and
+   * a figure's edges run on unbroken from the dots down.
    */
   const continuesBelow = (l: Line) => {
-    let y = l.bottom + descender + 1;
-    if (y >= H || !rowPrinted(y)) return false;
+    let y = l.bottom;
     while (y + 1 < H && rowPrinted(y + 1)) y++;
     return y - l.bottom > descender * 2;
   };
@@ -440,10 +496,12 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
 
   /**
    * Does anything follow the dots on the line's own rows — a mark like "[2]",
-   * or a unit? Either closes an answer, so the next line is a new part.
+   * or a unit? Either closes an answer, so the next line is a new part. The
+   * bracket that closes a coordinate, "( ……, …… )", sits right against the
+   * dots and closes nothing: "P( , )" over "Q( , )" is one answer.
    */
   const closed = (l: Line, top: number) => {
-    const end = Math.max(...l.spans.map(([, x1]) => x1)) + maxDot * 2;
+    const end = Math.max(...l.spans.map(([, x1]) => x1)) + Math.round(W * 0.016);
     for (let y = top; y <= Math.min(H - 1, l.bottom + descender); y++) {
       const off = y * W;
       for (let x = end; x < W; x++) if (lum[off + x] < INK) return true;

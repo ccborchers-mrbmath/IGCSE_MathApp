@@ -1,10 +1,10 @@
 import { Link } from "react-router-dom";
-import { useAuth } from "@/hooks/useAuth";
+import { PASSWORD_PATH, useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
-import { Settings, LogOut, BarChart3 } from "lucide-react";
+import { Settings, LogOut, BarChart3, KeyRound } from "lucide-react";
 
 export const AppHeader = () => {
-  const { user, isAdmin, loading, signOut } = useAuth();
+  const { user, isAdmin, loading, hasPassword, signOut } = useAuth();
 
   return (
     <header className="border-b bg-background">
@@ -31,6 +31,14 @@ export const AppHeader = () => {
                   <Link to="/admin">
                     <Settings className="mr-2 h-4 w-4" />
                     Question bank
+                  </Link>
+                </Button>
+              )}
+              {hasPassword && (
+                <Button asChild variant="ghost" size="sm" title="Change password">
+                  <Link to={PASSWORD_PATH}>
+                    <KeyRound className="h-4 w-4 sm:mr-2" />
+                    <span className="sr-only sm:not-sr-only">Password</span>
                   </Link>
                 </Button>
               )}
