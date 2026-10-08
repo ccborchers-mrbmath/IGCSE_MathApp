@@ -233,10 +233,7 @@ const QuestionView = () => {
         <Separator />
 
         {/* ---- AI marking ---- */}
-        {/* Keyed so moving to another question starts a fresh page: ink,
-            inserted room and a marking result all belong to this one. */}
         <MarkWork
-          key={question.id}
           questionId={question.id}
           marksAvailable={question.marks}
           questionImageUrl={question.questionImageUrl}

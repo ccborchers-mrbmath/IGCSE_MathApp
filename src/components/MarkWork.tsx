@@ -240,7 +240,10 @@ export const MarkWork = ({ questionId, marksAvailable, questionImageUrl }: Props
           </TabsList>
 
           <TabsContent value="draw" className="mt-3">
+            {/* Keyed so each question starts on a fresh page: ink and the room
+                opened in it belong to the question they were written on. */}
             <DrawingCanvas
+              key={questionId}
               ref={canvasRef}
               questionImageUrl={questionImageUrl}
               onInkChange={setHasInk}

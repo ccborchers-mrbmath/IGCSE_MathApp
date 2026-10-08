@@ -103,14 +103,31 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
 - **Room above an answer line is a cut in the question, not an overlay.** The
   image is drawn in bands with blank gaps between them, so the printed line
   and the answer on it move down together while the working above stays.
-  Gaps are in every undo snapshot, because opening one moves ink. A stroke
-  goes with whichever side of the cut its vertical midpoint is on —
-  handwriting rises above the printed text, so testing its top would strand
-  "2.3" above the dots it was written on.
+  Gaps are in every undo snapshot, because opening one moves ink.
+- **The cut never crosses writing.** It may fall on any blank row above the
+  line, so it falls on one that no group of writing touches: at the + if
+  clear, else the nearest clear row below, else above. Strokes are grouped
+  first — parts of one character (a fraction, a recurring dot, a 5's flag, a
+  decimal point) by being close relative to their size, words of one line by
+  sharing its height — and an eraser joins the ink it overlaps. Deciding
+  stroke by stroke, or row by row on single strokes, tears characters whose
+  parts have paper between them. Only when writing covers every blank row do
+  crossed groups move whole: with the line if they reach its print, else by
+  which side their middle is on. Extents are padded by the ribbon's true
+  maximum radius (1.24 widths), no more, or a real gap between lines closes.
 - **Answer lines are found from the pixels, not stored.** A Cambridge leader is
   a run of tiny, evenly pitched dots; a dotted graph grid line looks the same
   along its row but has grid lines running into it, and nothing printed ever
-  touches a leader. Every threshold is a share of the page width.
+  touches a leader. No + is offered where the page cannot be parted cleanly:
+  a line with print on every row above it, or print running on well past its
+  descenders (a table, a figure beside it). Every threshold is a share of the
+  page width.
+- **Every finger is counted in the capture phase of the whole canvas stack**,
+  so one landing on a + still makes a two-finger scroll. A + takes a quick
+  fingertip tap even with a stylus in use, but not a palm-sized contact, a
+  press while the nib is down, or a touch held past half a second. Its
+  highlight follows mouse and stylus pointers, never `:hover`, which a
+  touchscreen leaves stuck on the last thing tapped.
 - **Never filter a client query by a list of every row's id.** Parts and
   subtopic links were once fetched with `.in("question_id", <347 uuids>)`,
   which put 13 kB in a GET query string and forced a second round trip. RLS
@@ -232,6 +249,8 @@ showing them as 0% coverage.
   Providers, flagged by the security advisor.
 - **`generate-hint`** is not built yet — marking is the only AI call so far.
 - **Answer-line detection is unproven on the full corpus.** Checked on one
-  question (Q14, with a graph grid) at five scales and two JPEG qualities, plus
-  composited stacked and tightly spaced lines. Run `findAnswerCuts` over all
-  347 question images before relying on it on every paper.
+  real question (Q14, with a graph grid) at nine scales and four JPEG
+  qualities, and on synthetic pages built from it: stacked and tightly spaced
+  lines, sub-part lists, coordinates, vector arrows, probability trees,
+  diagrams beside a line, tables. Run `findAnswerLines` over all 347 question
+  images before relying on it on every paper.
