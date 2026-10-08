@@ -249,20 +249,38 @@ export const useAuth = () => {
    * token is still in the browser's history, and without this, Back and
    * reload within the hour would put the form back into recovery mode for
    * whoever is at the keyboard next.
+   *
+   * `currentPassword` goes to the server, which checks it when Supabase's
+   * "Require current password" is on. A reset link's session is exempt, so
+   * recovery sends none.
    */
-  const updatePassword = async (password: string) => {
+  const updatePassword = async (password: string, currentPassword?: string) => {
     const wasRecovering = authState.recovering;
     const email = authState.user?.email;
-    const { error } = await supabase.auth.updateUser({ password, data: { has_password: true } });
-    if (error) return { error, signedIn: true };
+    const { error } = await supabase.auth.updateUser({
+      password,
+      ...(currentPassword ? { current_password: currentPassword } : {}),
+      data: { has_password: true },
+    });
+    if (error) {
+      // With "Secure password change" on, a reset link's session over a day
+      // old needs a nonce this form never asks for. The link is spent: let
+      // the tab go rather than hold it on a form that cannot save.
+      if (wasRecovering && error.code === "reauthentication_needed") {
+        endRecovery();
+        await supabase.auth.signOut({ scope: "local" });
+        return { error, signedIn: false, linkExpired: true };
+      }
+      return { error, signedIn: true, linkExpired: false };
+    }
     endRecovery();
     updateAuthState({ recovering: false });
-    if (!wasRecovering || !email) return { error: null, signedIn: true };
+    if (!wasRecovering || !email) return { error: null, signedIn: true, linkExpired: false };
 
     await supabase.auth.signOut({ scope: "local" });
     const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
     if (signInError) logger.error("Sign-in after password reset failed", signInError);
-    return { error: null, signedIn: !signInError };
+    return { error: null, signedIn: !signInError, linkExpired: false };
   };
 
   return {

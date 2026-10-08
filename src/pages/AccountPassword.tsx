@@ -19,8 +19,8 @@ const MIN_LENGTH = 8;
  *    new password is asked for — the old one is what they forgot;
  *  - signed in as usual: the current password is checked first, so a session
  *    left open on a shared computer is not enough to change it from this
- *    page. That check runs in the browser; it is a safeguard, not a lock the
- *    server enforces (see CLAUDE.md).
+ *    page. The server checks it too only when Supabase's "Require current
+ *    password" is on (see CLAUDE.md).
  */
 const AccountPassword = () => {
   const { user, loading, recovering, recoveryPending, hasPassword, updatePassword, sendPasswordReset } =
@@ -64,8 +64,13 @@ const AccountPassword = () => {
         return;
       }
     }
-    const { error, signedIn } = await updatePassword(next);
+    const { error, signedIn, linkExpired } = await updatePassword(next, recovering ? undefined : current);
     setBusy(false);
+    if (linkExpired) {
+      toast.error("This reset link is too old. Ask for a new one.");
+      navigate("/auth?reset=1", { replace: true });
+      return;
+    }
     if (error) {
       toast.error(error.message);
       return;
