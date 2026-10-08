@@ -28,14 +28,15 @@ import {
   type Stroke,
 } from "@/lib/inking";
 import {
-  findAnswerCuts,
+  buttonPageY,
+  findAnswerLines,
   gapTotal,
   imageBands,
-  insertGap,
-  shiftStrokesBelow,
-  toPageY,
+  openRoom,
+  type AnswerLine,
   type Gap,
 } from "@/lib/answerSpace";
+import { toast } from "sonner";
 
 /**
  * Write an answer directly onto the question, the way a student writes on the
@@ -67,6 +68,9 @@ const INSERT_SHARE = 0.2;
 /** Past this the added room shrinks the handwriting more than the room helps. */
 const MAX_TOTAL_HEIGHT = 3200;
 const TOO_TALL = "More space would shrink your handwriting too much to mark reliably.";
+
+/** A fingertip tap is quick; a palm settles and stays. */
+const LONG_PRESS_MS = 500;
 
 type Tool = "pen" | "eraser" | "lasso" | "rect";
 
@@ -102,7 +106,7 @@ function paintQuestion(
  * question, in a few tens of milliseconds. Should the image be unreadable,
  * the canvas simply offers no buttons — never an error.
  */
-function answerCuts(img: HTMLImageElement, w: number, h: number): number[] {
+function answerLines(img: HTMLImageElement, w: number, h: number): AnswerLine[] {
   try {
     const probe = document.createElement("canvas");
     probe.width = w;
@@ -110,7 +114,7 @@ function answerCuts(img: HTMLImageElement, w: number, h: number): number[] {
     const ctx = probe.getContext("2d", { willReadFrequently: true });
     if (!ctx) return [];
     ctx.drawImage(img, 0, 0, w, h);
-    return findAnswerCuts(ctx.getImageData(0, 0, w, h));
+    return findAnswerLines(ctx.getImageData(0, 0, w, h));
   } catch {
     return [];
   }
@@ -149,8 +153,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
     const [tool, setTool] = useState<Tool>("pen");
     const [extraBlocks, setExtraBlocks] = useState(1);
     const [gaps, setGaps] = useState<Gap[]>([]);
-    /** Where the question can be cut to open room: just above each answer line. */
-    const [cuts, setCuts] = useState<number[]>([]);
+    /** The answer lines found in the question, each with a + to open room above it. */
+    const [lines, setLines] = useState<AnswerLine[]>([]);
     const [size, setSize] = useState<{ w: number; imgH: number } | null>(null);
     const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
     const [cssWidth, setCssWidth] = useState(0);
@@ -180,8 +184,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
     const penDown = useRef(false);
     const [usingPen, setUsingPen] = useState(false);
 
-    /** Set when a touch on a room button looks like a resting palm, not a tap. */
-    const strayTap = useRef(false);
+    /** The press in progress on a + button, so a palm or a scroll is not taken for a tap. */
+    const tap = useRef<{ stray: boolean; touch: boolean; at: number } | null>(null);
 
     /** Live touch contacts, so a second finger can be told from the first. */
     const touches = useRef<Map<number, { x: number; y: number }>>(new Map());
@@ -218,7 +222,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
           const w = Math.round(img.naturalWidth * scale);
           const imgH = Math.round(img.naturalHeight * scale);
           imageRef.current = img;
-          setCuts(answerCuts(img, w, imgH));
+          setLines(answerLines(img, w, imgH));
           setSize({ w, imgH });
           setStatus("ready");
         } catch {
@@ -425,13 +429,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
      * Open room just above an answer line. The printed page below the cut and
      * the answer written on it move down together; the working above stays.
      */
-    const insertSpace = (at: number) => {
+    const insertSpace = (line: AnswerLine) => {
       if (!canInsert) return;
-      const room = roomRef.current;
-      const pageY = toPageY(room.gaps, at);
-      commit(shiftStrokesBelow(strokesRef.current, pageY, insertH), {
-        gaps: insertGap(room.gaps, at, insertH),
-      });
+      const opened = openRoom(strokesRef.current, roomRef.current.gaps, line, insertH);
+      commit(opened.strokes, { gaps: opened.gaps });
     };
     const clearAll = () => {
       if (!strokes.length) return;
@@ -528,6 +529,39 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
       scroller.scrollTop -= dy;
     };
 
+    /*
+     * Fingers are counted on the way down, in the capture phase of the whole
+     * stack, so a finger that lands on a + button still counts towards a
+     * two-finger scroll. Counting them on the canvas alone would leave a
+     * scroll with one finger on a button drawing a line instead.
+     */
+    const trackTouchDown = (e: React.PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touches.current.size < 2) return;
+      // Two fingers always means scroll, never draw — and if the first finger
+      // had started a stroke or pressed a +, that was the beginning of this
+      // gesture rather than an answer, so discard it.
+      dropStrayTouchStroke();
+      if (tap.current) tap.current.stray = true;
+      panFrom.current = centroid();
+    };
+    const trackTouchMove = (e: React.PointerEvent) => {
+      if (e.pointerType !== "touch" || !touches.current.has(e.pointerId)) return;
+      touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (!panFrom.current) return;
+      const c = centroid();
+      if (c) {
+        panBy(c.x - panFrom.current.x, c.y - panFrom.current.y);
+        panFrom.current = c;
+      }
+    };
+    const trackTouchUp = (e: React.PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      touches.current.delete(e.pointerId);
+      panFrom.current = touches.current.size ? centroid() : null;
+    };
+
     const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
       if (disabled || status !== "ready") return;
       if (e.pointerType === "pen") {
@@ -536,19 +570,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
       }
 
       if (e.pointerType === "touch") {
-        touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        // Two fingers always means scroll, never draw — and if the first
-        // finger had started a stroke, that was the beginning of this gesture
-        // rather than an answer, so discard it.
-        const twoFingers = touches.current.size >= 2;
-        if (twoFingers || rejectTouch(e)) {
+        // Already a scroll: this is a second finger.
+        if (panFrom.current) return;
+        if (rejectTouch(e)) {
           dropStrayTouchStroke();
           // A finger is only ever a scroll once a stylus is in use, so a
           // single one pans too. Without this, touch-action: none would leave
           // a tablet unable to scroll the page over the canvas at all.
-          if (twoFingers || penSeen.current || penDown.current) {
-            panFrom.current = centroid();
-          }
+          if (penSeen.current || penDown.current) panFrom.current = centroid();
           return;
         }
       }
@@ -597,17 +626,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
       // that is the only warning a palm resting first will ever give.
       if (e.pointerType === "pen") armPen();
 
-      if (e.pointerType === "touch" && touches.current.has(e.pointerId)) {
-        touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (panFrom.current) {
-          const c = centroid();
-          if (c) {
-            panBy(c.x - panFrom.current.x, c.y - panFrom.current.y);
-            panFrom.current = c;
-          }
-          return;
-        }
-      }
+      // A scroll is moved by trackTouchMove.
+      if (e.pointerType === "touch" && panFrom.current) return;
 
       if (activePointer.current !== e.pointerId || rejectTouch(e)) return;
       const { x, y } = toLogical(e.clientX, e.clientY);
@@ -658,10 +678,6 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
 
     const endPointer = (e: React.PointerEvent<HTMLCanvasElement>) => {
       if (e.pointerType === "pen") penDown.current = false;
-      if (e.pointerType === "touch") {
-        touches.current.delete(e.pointerId);
-        panFrom.current = touches.current.size ? centroid() : null;
-      }
       if (activePointer.current !== e.pointerId) return;
       activePointer.current = null;
 
@@ -812,7 +828,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
           </Button>
         </div>
 
-        <div ref={wrapRef} className="relative w-full overflow-hidden rounded-lg border bg-white">
+        <div
+          ref={wrapRef}
+          className="relative w-full overflow-hidden rounded-lg border bg-white"
+          onPointerDownCapture={trackTouchDown}
+          onPointerMoveCapture={trackTouchMove}
+          onPointerUpCapture={trackTouchUp}
+          onPointerCancelCapture={trackTouchUp}
+        >
           <canvas ref={bgRef} className="block w-full" style={{ aspectRatio: `${logicalW} / ${logicalH}` }} />
           <canvas ref={inkRef} className="pointer-events-none absolute inset-0 block h-full w-full" />
           <canvas
@@ -831,35 +854,70 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
             onPointerLeave={endPointer}
           />
 
-          {cuts.map((at) => (
+          {lines.map((line) => (
             <div
-              key={at}
+              key={line.top}
               className="pointer-events-none absolute inset-x-0"
-              style={{ top: `${(toPageY(gaps, at) / logicalH) * 100}%` }}
+              style={{ top: `${(buttonPageY(gaps, line) / logicalH) * 100}%` }}
             >
               <button
                 type="button"
                 aria-label="Add working space above this answer line"
                 title={canInsert ? "Add working space here" : TOO_TALL}
-                disabled={disabled || !canInsert}
-                // A palm resting on the margin must not open space, so once a
-                // stylus is in use a touch here is ignored, as it is for ink.
+                // Disabled outright only while marking, when the canvas ignores
+                // input too. At the height cap it stays pressable so a tap
+                // explains itself instead of falling through as ink.
+                disabled={disabled}
+                aria-disabled={!canInsert}
                 onPointerDown={(e) => {
-                  strayTap.current = rejectTouch(e);
+                  tap.current = {
+                    // The nib on the glass, a palm-sized contact, or another
+                    // finger already down (a scroll) is never a tap.
+                    stray:
+                      e.pointerType === "touch" &&
+                      (penDown.current || looksLikePalm(e) || touches.current.size >= 2),
+                    touch: e.pointerType === "touch",
+                    at: e.timeStamp,
+                  };
                 }}
-                onClick={() => {
-                  if (strayTap.current) {
-                    strayTap.current = false;
+                onClick={(e) => {
+                  const t = tap.current;
+                  tap.current = null;
+                  // A keyboard press has no pointer behind it (detail 0). A
+                  // touch held long once a stylus is in use is a palm that
+                  // settled on the margin, not a fingertip.
+                  const fromPointer = e.detail > 0;
+                  if (
+                    fromPointer &&
+                    t &&
+                    (t.stray || (t.touch && penSeen.current && e.timeStamp - t.at > LONG_PRESS_MS))
+                  ) {
                     return;
                   }
-                  insertSpace(at);
+                  if (!canInsert) {
+                    toast(TOO_TALL);
+                    return;
+                  }
+                  insertSpace(line);
                 }}
-                className="peer pointer-events-auto absolute left-1 top-0 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-dashed border-primary/70 bg-white/90 text-primary shadow-sm transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
+                // As on the canvas: a press here is never claimed by the
+                // browser as a page drag.
+                style={{ touchAction: "none" }}
+                className={cn(
+                  "peer pointer-events-auto absolute left-1 top-0 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-dashed bg-white/90 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+                  canInsert
+                    ? // Hover only where hover exists: a touchscreen leaves
+                      // :hover on the last thing tapped.
+                      "border-primary/70 text-primary [@media(hover:hover)]:hover:bg-primary [@media(hover:hover)]:hover:text-primary-foreground"
+                    : "cursor-not-allowed border-muted-foreground/40 text-muted-foreground/60",
+                )}
               >
                 <Plus className="h-4 w-4" />
               </button>
-              {/* Where the cut falls, shown before it is made. */}
-              <div className="absolute left-9 right-2 top-0 border-t border-dashed border-primary/60 opacity-0 transition-opacity peer-hover:opacity-100 peer-focus-visible:opacity-100" />
+              {/* Where the room opens, shown before it does. */}
+              {canInsert && (
+                <div className="absolute left-9 right-2 top-0 border-t border-dashed border-primary/60 opacity-0 transition-opacity peer-focus-visible:opacity-100 [@media(hover:hover)]:peer-hover:opacity-100" />
+              )}
             </div>
           ))}
         </div>
@@ -874,7 +932,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(
                 : (usingPen
                     ? "Stylus in use — rest your hand on the screen, and swipe with a finger to scroll."
                     : "Write with a stylus, finger or mouse. Swipe with two fingers to scroll.") +
-                  (cuts.length ? " Tap + beside an answer line for more room." : "")}
+                  (lines.length ? " Tap + beside an answer line for more room." : "")}
         </p>
       </div>
     );

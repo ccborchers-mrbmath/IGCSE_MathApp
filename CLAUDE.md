@@ -103,14 +103,25 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
 - **Room above an answer line is a cut in the question, not an overlay.** The
   image is drawn in bands with blank gaps between them, so the printed line
   and the answer on it move down together while the working above stays.
-  Gaps are in every undo snapshot, because opening one moves ink. A stroke
-  goes with whichever side of the cut its vertical midpoint is on —
-  handwriting rises above the printed text, so testing its top would strand
-  "2.3" above the dots it was written on.
+  Gaps are in every undo snapshot, because opening one moves ink.
+- **The cut never crosses ink.** It may fall on any blank row above the line,
+  so it falls on one no stroke touches: at the + if clear, else the nearest
+  clear row below, else above. Every stroke is then wholly on one side — a
+  "5" is never parted from its flag, a line of working never split, an eraser
+  never parted from what it rubbed out. Deciding stroke by stroke (by
+  midpoint, say) tears multi-stroke characters apart. Only when ink covers
+  every blank row do whole lines of writing move by which side their middle
+  is on.
 - **Answer lines are found from the pixels, not stored.** A Cambridge leader is
   a run of tiny, evenly pitched dots; a dotted graph grid line looks the same
   along its row but has grid lines running into it, and nothing printed ever
-  touches a leader. Every threshold is a share of the page width.
+  touches a leader. A line with print on every row above it (beside a
+  diagram, in a table) gets no + at all — there is nowhere to cut that would
+  not split the figure. Every threshold is a share of the page width.
+- **Every finger is counted in the capture phase of the whole canvas stack**,
+  so one landing on a + still makes a two-finger scroll. A + takes a quick
+  fingertip tap even with a stylus in use, but not a palm-sized contact, a
+  press while the nib is down, or a touch held past half a second.
 - **Never filter a client query by a list of every row's id.** Parts and
   subtopic links were once fetched with `.in("question_id", <347 uuids>)`,
   which put 13 kB in a GET query string and forced a second round trip. RLS
@@ -232,6 +243,8 @@ showing them as 0% coverage.
   Providers, flagged by the security advisor.
 - **`generate-hint`** is not built yet — marking is the only AI call so far.
 - **Answer-line detection is unproven on the full corpus.** Checked on one
-  question (Q14, with a graph grid) at five scales and two JPEG qualities, plus
-  composited stacked and tightly spaced lines. Run `findAnswerCuts` over all
-  347 question images before relying on it on every paper.
+  real question (Q14, with a graph grid) at nine scales and four JPEG
+  qualities, and on synthetic pages built from it: stacked and tightly spaced
+  lines, sub-part lists, coordinates, vector arrows, probability trees,
+  diagrams beside a line, tables. Run `findAnswerLines` over all 347 question
+  images before relying on it on every paper.
