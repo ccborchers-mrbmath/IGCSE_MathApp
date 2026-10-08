@@ -276,9 +276,14 @@ showing them as 0% coverage.
   only — heavily rate-limited, and it delivers only to the project team's own
   addresses — so students need custom SMTP before launch. Turn on "Secure
   password change" too (see Conventions).
-- **Answer-line detection is unproven on the full corpus.** Checked on one
-  real question (Q14, with a graph grid) at nine scales and four JPEG
-  qualities, and on synthetic pages built from it: stacked and tightly spaced
-  lines, sub-part lists, coordinates, vector arrows, probability trees,
-  diagrams beside a line, tables. Run `findAnswerLines` over all 347 question
-  images before relying on it on every paper.
+- **Answer-line detection, checked on all 347 stored question images** (every
+  overlay looked at): 324 get a +, none sits in the wrong place or cuts
+  through print, and grids, tables and diagrams get none. A labelled pair like
+  "box A …kg" over "box B …kg" gets one + per line, by choice.
+- **27 stored question images are cropped too short at the bottom**, and in 14
+  the answer line is cut off entirely, so no + can appear: Feb-Mar 42 q06;
+  May-Jun 22 q13 (ii)(b), 23 q16, 42 q21 (b); Oct-Nov 21 q03, q06 (b), q13,
+  q17 (b); Oct-Nov 23 q26 (b), q28; Oct-Nov 41 q21, q24 (d); Oct-Nov 43 q04 (b),
+  q26 (b). The other 13 clip only the mark: Feb-Mar 42 q14, q17; May-Jun 22
+  q19, 42 q26, 43 q26; Oct-Nov 41 q15, q29; Oct-Nov 42 q10, q11, q14, q15, q16;
+  Oct-Nov 43 q10. Re-crop them at ingestion.
