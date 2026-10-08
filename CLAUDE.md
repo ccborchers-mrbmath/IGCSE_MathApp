@@ -142,12 +142,15 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
 - **The current-password check is a server lock only when Supabase makes it
   one.** Otherwise anyone holding a session can call `updateUser` directly.
   Both switches are in Auth → Sign In / Providers → Email, and the app works
-  with either on. "Secure password change" makes the server demand a sign-in
-  within 24 hours; the change form signs in with the current password just
-  before updating. "Require current password" makes the server check it; the
-  form sends `current_password`. A reset link's session is exempt from that
-  check (the server treats every email-link session, `otp` in its token, as a
-  recovery), so recovery sends none.
+  with either on. "Require current password" makes the server check it; the
+  form sends `current_password`. But the server exempts every session that
+  came from an email link (`otp` in its token) — a reset link, and also the
+  signup confirmation that is most students' first, long-lived session — so
+  recovery sends none, and that switch alone locks only password sign-ins.
+  "Secure password change" covers the rest: any session over 24 hours old
+  must sign in again, which the change form does just before updating. A
+  reset tab left open past that cannot save, so it is let go: recovery ends,
+  the link's session is signed out and the student is sent for a new link.
 - **The reset form never reveals who has an account.** Supabase answers an
   unknown address at once; only a real account hits the resend limit or a
   failed send. Those errors read as "sent" — only a malformed address or a

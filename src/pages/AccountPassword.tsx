@@ -64,8 +64,13 @@ const AccountPassword = () => {
         return;
       }
     }
-    const { error, signedIn } = await updatePassword(next, recovering ? undefined : current);
+    const { error, signedIn, linkExpired } = await updatePassword(next, recovering ? undefined : current);
     setBusy(false);
+    if (linkExpired) {
+      toast.error("This reset link is too old. Ask for a new one.");
+      navigate("/auth?reset=1", { replace: true });
+      return;
+    }
     if (error) {
       toast.error(error.message);
       return;
