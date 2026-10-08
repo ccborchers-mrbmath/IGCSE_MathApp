@@ -346,6 +346,17 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
   // must not cost the whole line.
   const touched = (l: Line) => {
     const reach = Math.max(2, Math.round(W * 0.0035));
+    /** Print just above or below the dots in this column — two pixels clear
+     *  of them, so their own anti-aliased edge and JPEG halo do not count. */
+    const touchAt = (x: number) => {
+      for (let k = 2; k <= reach + 1; k++) {
+        const up = l.y - k;
+        const down = l.bottom + k;
+        if ((up >= 0 && lum[up * W + x] < PRINT) || (down < H && lum[down * W + x] < PRINT)) return true;
+      }
+      return false;
+    };
+
     const seen = new Uint8Array(W);
     let columns = 0;
     const hitColumns: number[] = [];
@@ -354,15 +365,7 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
         if (seen[x]) continue;
         seen[x] = 1;
         columns++;
-        // Two pixels clear of the dots, so their own anti-aliased edge and
-        // JPEG halo do not count.
-        let hit = false;
-        for (let k = 2; k <= reach + 1 && !hit; k++) {
-          const up = l.y - k;
-          const down = l.bottom + k;
-          hit = (up >= 0 && lum[up * W + x] < PRINT) || (down < H && lum[down * W + x] < PRINT);
-        }
-        if (hit) hitColumns.push(x);
+        if (touchAt(x)) hitColumns.push(x);
       }
     }
     if (hitColumns.length <= Math.max(3, columns * 0.01)) return false;
@@ -374,14 +377,35 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
       if (last && x - last[1] <= maxDot * 2) last[1] = x;
       else places.push([x, x]);
     }
+
     // A word is several characters wide; a grid line touching the dots is a
-    // pixel or two. Thin touches keep the strict allowance above, so a faint
-    // grid touching its own border in only a few places is still a grid.
+    // pixel or two. A word at the end of the chain shows only a sliver inside
+    // it, so follow the print outward, over the gaps between letters, until
+    // it is clearly wider than any grid line.
     const minWord = Math.max(4, W * 0.006);
     const maxWord = W * 0.04;
-    const words = places.filter(([a, b]) => b - a >= minWord);
+    const isWord = ([a, b]: [number, number]) => {
+      let lo = a;
+      let hi = b;
+      for (let x = a - 1, gap = 0; x >= 0 && hi - x <= minWord && gap <= 3; x--) {
+        if (touchAt(x)) {
+          lo = x;
+          gap = 0;
+        } else gap++;
+      }
+      for (let x = b + 1, gap = 0; x < W && x - lo <= minWord && gap <= 3; x++) {
+        if (touchAt(x)) {
+          hi = x;
+          gap = 0;
+        } else gap++;
+      }
+      return hi - lo >= minWord;
+    };
+    const words = places.filter(isWord);
+    // Thin touches keep the strict allowance above, so a faint grid touching
+    // its own border in only a few places is still a grid.
     let thin = 0;
-    for (const [a, b] of places) if (b - a < minWord) thin += b - a + 1;
+    for (const p of places) if (!words.includes(p)) thin += p[1] - p[0] + 1;
     return !(
       words.length <= 3 &&
       words.every(([a, b]) => b - a <= maxWord) &&
@@ -445,13 +469,12 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
 
   /**
    * Does the print carry on straight under the line? An answer line's own
-   * text stops within a descender or two — "y", "[2]", the "dx" of dy/dx. A
-   * table's rules and a figure's edges run on well past that, and a leader
-   * among them has nowhere to cut that would not split them.
+   * text stops within a descender or two — "y", "[2]", the "dx" of dy/dx —
+   * and the next part's text starts after a blank row. A table's rules and
+   * a figure's edges run on unbroken from the dots down.
    */
   const continuesBelow = (l: Line) => {
-    let y = l.bottom + descender + 1;
-    if (y >= H || !rowPrinted(y)) return false;
+    let y = l.bottom;
     while (y + 1 < H && rowPrinted(y + 1)) y++;
     return y - l.bottom > descender * 2;
   };
@@ -465,10 +488,12 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
 
   /**
    * Does anything follow the dots on the line's own rows — a mark like "[2]",
-   * or a unit? Either closes an answer, so the next line is a new part.
+   * or a unit? Either closes an answer, so the next line is a new part. The
+   * bracket that closes a coordinate, "( ……, …… )", sits right against the
+   * dots and closes nothing: "P( , )" over "Q( , )" is one answer.
    */
   const closed = (l: Line, top: number) => {
-    const end = Math.max(...l.spans.map(([, x1]) => x1)) + maxDot * 2;
+    const end = Math.max(...l.spans.map(([, x1]) => x1)) + Math.round(W * 0.016);
     for (let y = top; y <= Math.min(H - 1, l.bottom + descender); y++) {
       const off = y * W;
       for (let x = end; x < W; x++) if (lum[off + x] < INK) return true;
