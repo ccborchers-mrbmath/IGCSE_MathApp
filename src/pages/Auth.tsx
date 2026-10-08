@@ -70,7 +70,13 @@ const Auth = () => {
     setBusy(true);
     const { error } = await sendPasswordReset(email);
     setBusy(false);
-    if (error) {
+    // Supabase answers an unknown address at once, and only a real account
+    // can hit the resend limit or a failed send. Showing those errors would
+    // tell anyone which addresses have accounts, so they read as sent; only
+    // a malformed address or a dropped connection is reported.
+    const reportable =
+      error && (!error.status || error.code === "email_address_invalid" || error.code === "validation_failed");
+    if (reportable) {
       toast.error(error.message);
       return;
     }
@@ -87,7 +93,7 @@ const Auth = () => {
               {view === "sent"
                 ? // Worded the same whether or not the address has an account, so
                   // the form cannot be used to find out who has signed up.
-                  `If ${email} has an account, a link to set a new password is on its way. It works once and expires, so use it soon — and check your spam folder.`
+                  `If ${email} has an account, a link to set a new password is on its way. It works once and expires, so use it soon — and check your spam folder. If you asked a moment ago, wait a minute before asking again.`
                 : "Enter the email address you signed up with and we'll send you a link to set a new password."}
             </CardDescription>
           </CardHeader>

@@ -128,13 +128,26 @@ ledger** (`deduct_credits`). Metering ships before checkout does.
   press while the nib is down, or a touch held past half a second. Its
   highlight follows mouse and stylus pointers, never `:hover`, which a
   touchscreen leaves stuck on the last thing tapped.
-- **Password recovery is trusted only from Supabase's `PASSWORD_RECOVERY`
-  event**, which fires after the reset link's token is verified, and only
-  recovery mode skips the current-password check. The URL is never evidence:
-  anyone with an open session can type `#type=recovery`. The listener is
-  registered when `useAuth` loads, not on first render, because the client
-  verifies the link as soon as it is created and a late subscriber never
-  hears the event.
+- **Recovery mode (no current password asked) is narrow on purpose.** The
+  client fires `PASSWORD_RECOVERY` for *any* URL carrying a valid access token
+  and `type=recovery` — the reset link replayed from browser history included,
+  since its token outlives the reset — and broadcasts it to every open tab.
+  So it is honoured only in the tab the link opened in, pinned to that link's
+  user and `session_id`, and ended by any password change or session change.
+  Saving the new password revokes the link's session (`signOut({ scope:
+  "local" })`) and signs in afresh, so a replayed link no longer works. Kept
+  per tab in `sessionStorage` so a reload does not ask for the forgotten
+  password. The listener starts when `useAuth` loads, not on first render: the
+  client verifies the link as soon as it is created.
+- **The current-password check is a browser safeguard, not a server lock.**
+  Anyone holding a session can call `updateUser` directly. Supabase's "Secure
+  password change" (Auth settings) makes the server demand a recent sign-in;
+  the change form signs in with the current password just before updating,
+  so it still works with that on.
+- **The reset form never reveals who has an account.** Supabase answers an
+  unknown address at once; only a real account hits the resend limit or a
+  failed send. Those errors read as "sent" — only a malformed address or a
+  dropped connection is shown.
 - **Never filter a client query by a list of every row's id.** Parts and
   subtopic links were once fetched with `.in("question_id", <347 uuids>)`,
   which put 13 kB in a GET query string and forced a second round trip. RLS
@@ -261,7 +274,8 @@ showing them as 0% coverage.
   deploy-preview pattern). A link the allowlist rejects falls back to the Site
   URL, which the app also handles. Supabase's built-in sender is for testing
   only — heavily rate-limited, and it delivers only to the project team's own
-  addresses — so students need custom SMTP before launch.
+  addresses — so students need custom SMTP before launch. Turn on "Secure
+  password change" too (see Conventions).
 - **Answer-line detection is unproven on the full corpus.** Checked on one
   real question (Q14, with a graph grid) at nine scales and four JPEG
   qualities, and on synthetic pages built from it: stacked and tightly spaced
