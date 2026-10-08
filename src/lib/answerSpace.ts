@@ -339,13 +339,16 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
 
   // A dotted grid line looks just like a leader along its own row. What gives
   // it away is the grid's vertical lines running into it, from both sides
-  // inside the grid and from one side along its border. Nothing printed ever
-  // touches a leader: the space over it is where the student writes.
+  // inside the grid and from one side along its border — all along its
+  // length. Print set right against a leader touches it in a place or two
+  // only: the "or" between two leaders, a unit after them. The chain of dots
+  // can even run on into such a word's lower strokes, so being touched there
+  // must not cost the whole line.
   const touched = (l: Line) => {
     const reach = Math.max(2, Math.round(W * 0.0035));
     const seen = new Uint8Array(W);
     let columns = 0;
-    let hits = 0;
+    const hitColumns: number[] = [];
     for (const [x0, x1] of l.spans) {
       for (let x = x0; x <= x1; x++) {
         if (seen[x]) continue;
@@ -359,10 +362,32 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
           const down = l.bottom + k;
           hit = (up >= 0 && lum[up * W + x] < PRINT) || (down < H && lum[down * W + x] < PRINT);
         }
-        if (hit) hits++;
+        if (hit) hitColumns.push(x);
       }
     }
-    return hits > Math.max(3, columns * 0.01);
+    if (hitColumns.length <= Math.max(3, columns * 0.01)) return false;
+
+    hitColumns.sort((a, b) => a - b);
+    const places: [number, number][] = [];
+    for (const x of hitColumns) {
+      const last = places[places.length - 1];
+      if (last && x - last[1] <= maxDot * 2) last[1] = x;
+      else places.push([x, x]);
+    }
+    // A word is several characters wide; a grid line touching the dots is a
+    // pixel or two. Thin touches keep the strict allowance above, so a faint
+    // grid touching its own border in only a few places is still a grid.
+    const minWord = Math.max(4, W * 0.006);
+    const maxWord = W * 0.04;
+    const words = places.filter(([a, b]) => b - a >= minWord);
+    let thin = 0;
+    for (const [a, b] of places) if (b - a < minWord) thin += b - a + 1;
+    return !(
+      words.length <= 3 &&
+      words.every(([a, b]) => b - a <= maxWord) &&
+      thin <= Math.max(3, columns * 0.01) &&
+      hitColumns.length <= columns * 0.2
+    );
   };
   const lines = found.filter((l) => !touched(l));
 
