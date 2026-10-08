@@ -389,13 +389,13 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
     const isWord = ([a, b]: [number, number]) => {
       let lo = a;
       let hi = b;
-      for (let x = a - 1, gap = 0; x >= 0 && hi - x <= minWord && gap <= letterGap; x--) {
+      for (let x = a - 1, gap = 0; x >= 0 && hi - lo < minWord && gap <= letterGap; x--) {
         if (touchAt(x)) {
           lo = x;
           gap = 0;
         } else gap++;
       }
-      for (let x = b + 1, gap = 0; x < W && x - lo <= minWord && gap <= letterGap; x++) {
+      for (let x = b + 1, gap = 0; x < W && hi - lo < minWord && gap <= letterGap; x++) {
         if (touchAt(x)) {
           hi = x;
           gap = 0;
@@ -404,14 +404,20 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
       return hi - lo >= minWord;
     };
     const words = places.filter(isWord);
-    // Thin touches keep the strict allowance above, so a faint grid touching
-    // its own border in only a few places is still a grid.
+    // Thin touches are grid lines — or a lone glyph: the "(" and "," of a
+    // coordinate, a one-letter unit. A grid touches its rows every few
+    // millimetres; one or two glyphs touch a leader far apart, if at all.
+    // A faint grid touching its own border in three places is still a grid.
+    const thinPlaces = places.filter((p) => !words.includes(p));
     let thin = 0;
-    for (const p of places) if (!words.includes(p)) thin += p[1] - p[0] + 1;
+    for (const [a, b] of thinPlaces) thin += b - a + 1;
+    const fewGlyphs =
+      thinPlaces.length <= 2 &&
+      (thinPlaces.length < 2 || thinPlaces[1][0] - thinPlaces[0][1] >= W * 0.08);
     return !(
       words.length <= 3 &&
       words.every(([a, b]) => b - a <= maxWord) &&
-      thin <= Math.max(3, columns * 0.01) &&
+      (thin <= Math.max(3, columns * 0.01) || fewGlyphs) &&
       hitColumns.length <= columns * 0.2
     );
   };
@@ -488,70 +494,33 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
     return n;
   };
 
-  /** Rightmost print after the dots on a line's own rows — its mark or
-   *  unit — or -1 when the dots are the last thing on the line. */
-  const printAfter = (l: Line, top: number) => {
-    const end = Math.max(...l.spans.map(([, x1]) => x1)) + maxDot * 2;
-    let right = -1;
+  /**
+   * Does anything follow the dots on the line's own rows — a mark like "[2]",
+   * or a unit? Either closes an answer, so the next line is a new part. The
+   * bracket that closes a coordinate, "( ……, …… )", sits right against the
+   * dots and closes nothing: "P( , )" over "Q( , )" is one answer.
+   */
+  const closed = (l: Line, top: number) => {
+    const end = Math.max(...l.spans.map(([, x1]) => x1)) + Math.round(W * 0.016);
     for (let y = top; y <= Math.min(H - 1, l.bottom + descender); y++) {
       const off = y * W;
-      for (let x = W - 1; x > Math.max(right, end); x--) {
-        if (lum[off + x] < INK) {
-          right = x;
-          break;
-        }
-      }
+      for (let x = end; x < W; x++) if (lum[off + x] < INK) return true;
     }
-    return right;
+    return false;
   };
 
   // Lines a hand's breadth apart with nothing printed between them are one
   // answer written over several lines; offer room above the first only.
-  const tops = isolated.map((l) => (continuesBelow(l) ? null : textTop(l)));
-
-  // Only a mark — "[2]" — closes an answer, and Cambridge sets every mark
-  // flush with the right margin. A unit or a coordinate's closing bracket
-  // follows the dots wherever they end, short of that column, so "box A …kg"
-  // over "box B …kg [3]" and "P( , )" over "Q( , )" each stay one answer.
-  // Only print after the dots counts: the first line of a long answer often
-  // runs its dots right to the margin.
-  const after = isolated.map((l, i) => (tops[i] === null ? -1 : printAfter(l, tops[i]!)));
-  const markColumn = Math.max(...after) - Math.round(W * 0.012);
-
-  /** Width of the last word on the line, ending at `right`: a mark is a
-   *  bracket, a number and a bracket; a coordinate's ")" is one glyph. */
-  const glyphGap = Math.max(3, Math.round(W * 0.005));
-  const lastWordWidth = (l: Line, top: number, right: number) => {
-    const bottom = Math.min(H - 1, l.bottom + descender);
-    const printedAt = (x: number) => {
-      // Any print at all: a thin "1" in a small, soft scan is faint.
-      for (let y = top; y <= bottom; y++) if (lum[y * W + x] < PRINT) return true;
-      return false;
-    };
-    let left = right;
-    for (let x = right - 1, gap = 0; x >= 0 && gap <= glyphGap; x--) {
-      if (printedAt(x)) {
-        left = x;
-        gap = 0;
-      } else gap++;
-    }
-    return right - left;
-  };
-  const closed = (i: number) =>
-    after[i] >= 0 &&
-    after[i] >= markColumn &&
-    lastWordWidth(isolated[i], tops[i]!, after[i]) >= W * 0.011;
-
   const answers: AnswerLine[] = [];
-  let prev: { line: Line; index: number } | null = null;
-  isolated.forEach((l, i) => {
-    const top = tops[i];
+  let prev: { line: Line; top: number } | null = null;
+  for (const l of isolated) {
+    const top = continuesBelow(l) ? null : textTop(l);
     if (top === null) {
       prev = null;
-      return;
+      continue;
     }
     let stacked = false;
-    if (prev && l.y - prev.line.bottom < stackGap && !closed(prev.index)) {
+    if (prev && l.y - prev.line.bottom < stackGap && !closed(prev.line, prev.top)) {
       stacked = true;
       // Skip the line's own descenders — "y", a bracket — which hang below
       // the dots without being anything printed in between.
@@ -562,14 +531,14 @@ export function findAnswerLines(px: Pixels): AnswerLine[] {
         }
       }
     }
-    prev = { line: l, index: i };
-    if (stacked) return;
+    prev = { line: l, top };
+    if (stacked) continue;
 
     // The + sits in the blank paper above the text: a line of text up, or
     // halfway into a narrower gap. It never sits on print.
     const room = blankAbove(top);
-    if (room < 2) return;
+    if (room < 2) continue;
     answers.push({ top, room, cut: top - Math.min(reach, Math.floor(room / 2)) });
-  });
+  }
   return answers;
 }
